@@ -1,0 +1,8 @@
+{
+  "model": "jev-1.13@2026-09-01",
+  "question_schema_version": "questions-v1",
+  "extractor_version": "observe-v1",
+  "policy_digest": "<first 16 hex of sha256(project policy JSON) — recorded in decision events>",
+  "candidate_filter_version": "candidates-v1",
+  "gate_version": "heuristic-v0"
+}

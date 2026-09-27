@@ -3,6 +3,9 @@ import type { ElementHandle, Page } from '@playwright/test';
 import type { Observation, ObservedElement } from '@qa/contracts';
 import { ensureEvalShim } from './shim.ts';
 
+/** Bumped whenever extraction semantics change; part of the pinned decision configuration. */
+export const OBSERVATION_EXTRACTOR_VERSION = 'observe-v1';
+
 /** Stays below the 255-option provider limit with room for NONE / NEED_MORE_CONTEXT. */
 export const DEFAULT_MAX_CANDIDATES = 200;
 

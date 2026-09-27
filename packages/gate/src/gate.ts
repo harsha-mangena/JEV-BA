@@ -27,6 +27,14 @@ export interface GateConfig {
   min_pair_score?: number;
   /** Consecutive no-effect outcomes before the loop detector stops acting. */
   max_recent_no_effect: number;
+  /** Fitted stage-5 scorer (Phase 8). Applies only to the exact decision configuration it was fitted on. */
+  calibrated?: {
+    version_id: string;
+    decision_config_digest: string;
+    threshold: number;
+    score(f: GateFeatures): number;
+    supported(f: GateFeatures): boolean;
+  };
 }
 
 export const HEURISTIC_GATE_V0: GateConfig = {
@@ -71,6 +79,8 @@ export interface GateInput {
    * probability, and does not turn an uncertain decision into a certain one.
    */
   s2_selection?: { op: Operation; node_id: string };
+  /** Digest of model, question schema, extractor, policy, candidate filter and gate versions in use. */
+  decision_config_digest?: string;
 }
 
 export interface GateDecision {
@@ -180,13 +190,22 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
   if (g.recent_no_effect >= g.config.max_recent_no_effect) return deny('ABSTAIN', ['loop_no_effect'], { op, node_id: nodeId, features });
   if (g.s2_selection) return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 's2_selected_uncalibrated'], features };
   const c = g.config;
+  const cal = c.calibrated;
+  if (cal && g.decision_config_digest === cal.decision_config_digest) {
+    if (!cal.supported(features)) reasons.push('cohort_uncalibrated');
+    else if (cal.score(features) < cal.threshold) reasons.push('calibrated_score_low');
+    if (reasons.some((r) => r !== 'candidates_truncated')) return { outcome: g.budget.s2_remaining > 0 ? 'ESCALATE' : 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };
+    return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, `calibrated:${cal.version_id}`], features };
+  }
+  // No calibration for this exact configuration: heuristic routing, labelled as such.
+  if (cal) reasons.push('calibration_config_mismatch');
   if (features.op_probability < c.min_op_probability) reasons.push('op_uncertain');
   if (targetAnswer) {
     if (targetAnswer.top.p < c.min_target_probability) reasons.push('target_uncertain');
     if (targetAnswer.margin < c.min_target_margin) reasons.push('target_margin_low');
     if (c.min_pair_score !== undefined && features.pair_score! < c.min_pair_score) reasons.push('pair_score_low');
   }
-  const uncertain = reasons.some((r) => r !== 'candidates_truncated');
+  const uncertain = reasons.some((r) => r !== 'candidates_truncated' && r !== 'calibration_config_mismatch');
   if (uncertain) {
     const outcome: GateOutcome = g.budget.s2_remaining > 0 ? 'ESCALATE' : 'ABSTAIN';
     return { outcome, op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };

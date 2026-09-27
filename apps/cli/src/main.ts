@@ -19,6 +19,7 @@ import * as svc from './service.ts';
 import * as baselineCmd from './baselines.ts';
 import * as coverageCmd from './coverage.ts';
 import * as compileCmd from './compile.ts';
+import * as evalsCmd from './evals.ts';
 import { FindingLedger, FsBaselineStore } from '@qa/quality';
 
 const USAGE = `Usage: qa <command> [options]
@@ -46,6 +47,11 @@ Regression compilation and repairs:
   compile                  Compile a passed exploration case into a proposal + Playwright export (--run --scenario).
   repair propose           Propose a locator repair from a step_target_unavailable failure (--run --scenario).
   repair apply             Validate and apply a repair (--config <repair.json> --approver); semantic changes are refused.
+
+Calibration (Phase 8):
+  evals extract            Export S1 decision records for labeling (--run <dir>... --app <id> --decision-config <file> [--labels out]).
+  calibrate                Fit, select threshold, evaluate on grouped splits (--labels <jsonl> --target 0.99 [--registry dir]).
+  evals canary             Check a candidate configuration's labeled replay against the current calibration (--labels).
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
@@ -103,6 +109,11 @@ const { positionals, values } = parseArgs({
     approver: { type: 'string' },
     run: { type: 'string', multiple: true },
     base: { type: 'string' },
+    labels: { type: 'string' },
+    target: { type: 'string' },
+    registry: { type: 'string', default: 'evals/registry' },
+    app: { type: 'string' },
+    'decision-config': { type: 'string' },
     head: { type: 'string' },
     repo: { type: 'string' },
     tenant: { type: 'string' },
@@ -240,6 +251,10 @@ async function main(): Promise<number> {
       return compileCmd.compile(values);
     case 'repair':
       return compileCmd.repair(positionals[1], values);
+    case 'evals':
+      return evalsCmd.evals(positionals[1], values);
+    case 'calibrate':
+      return evalsCmd.calibrateCmd(values);
     case 'migrate':
       return svc.migrate();
     case 'bootstrap':

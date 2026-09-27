@@ -15,6 +15,7 @@
     "@qa/oracles": "*",
     "@qa/s1": "*",
     "@qa/s2": "*",
-    "@qa/quality": "*"
+    "@qa/quality": "*",
+    "@qa/calibration": "*"
   }
 }

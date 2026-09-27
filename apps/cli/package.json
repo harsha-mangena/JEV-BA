@@ -18,6 +18,7 @@
     "yaml": "^2.6.0",
     "@qa/quality": "*",
     "@qa/coverage": "*",
-    "@qa/compiler": "*"
+    "@qa/compiler": "*",
+    "@qa/calibration": "*"
   }
 }

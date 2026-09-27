@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ElementHandle } from '@playwright/test';
-import { observe, resolveNode } from '@qa/browser';
+import { OBSERVATION_EXTRACTOR_VERSION, observe, resolveNode } from '@qa/browser';
+import { digestConfig, type DecisionConfig } from '@qa/calibration';
 import { bindControl, type Observation, type Operation } from '@qa/contracts';
 import { evaluateGate, HEURISTIC_GATE_V0, type GateConfig, type GateDecision, type GateInput } from '@qa/gate';
 import { buildDecisionRequest, validateResponse, type S1RawResponse, type S1Request, type SystemOneProvider } from '@qa/s1';
@@ -15,7 +16,12 @@ export interface ExplorationOptions {
   s2?: SystemTwoProvider;
   /** Provider request retries with backoff; never repeats a browser action. */
   providerRetries?: number;
+  /** Question schema version; bump when prompts or head structure change. */
+  questionSchemaVersion?: string;
 }
+
+export const QUESTION_SCHEMA_VERSION = 'questions-v1';
+export const CANDIDATE_FILTER_VERSION = 'candidates-v1';
 
 /** Operations whose executors have passed capability tests. SELECT/SCROLL are not enabled yet. */
 const ENABLED_OPERATIONS: Operation[] = ['CLICK', 'TYPE', 'WAIT', 'DONE', 'BLOCKED'];
@@ -61,6 +67,15 @@ export function explorationDriver(x: ExplorationOptions): Driver {
     let s2Calls = 0;
     let noEffect = 0;
     let decisionNo = 0;
+    const decisionConfig: DecisionConfig = {
+      model: x.model,
+      question_schema_version: x.questionSchemaVersion ?? QUESTION_SCHEMA_VERSION,
+      extractor_version: OBSERVATION_EXTRACTOR_VERSION,
+      policy_digest: createHash('sha256').update(JSON.stringify(o.policy)).digest('hex').slice(0, 16),
+      candidate_filter_version: CANDIDATE_FILTER_VERSION,
+      gate_version: config.version,
+    };
+    const decisionDigest = digestConfig(decisionConfig);
 
     for (const m of s.milestones) {
       let reobservations = 0;
@@ -106,6 +121,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
             return { current_document_id: current, node };
           },
           recent_no_effect: noEffect,
+          decision_config_digest: decisionDigest,
         };
 
         let decision: GateDecision = await evaluateGate(common);
@@ -122,7 +138,9 @@ export function explorationDriver(x: ExplorationOptions): Driver {
             target_distribution: d.op && d.op !== 'DONE' && d.op !== 'WAIT' && d.op !== 'BLOCKED' ? (s1.answers[`${d.op.toLowerCase()}_target`]?.distribution ?? null) : null,
             features: d.features,
             gate_config_version: config.version,
-            calibration_version: config.calibration_version,
+            calibration_version: config.calibrated?.version_id ?? config.calibration_version,
+            decision_config: decisionConfig,
+            decision_config_digest: decisionDigest,
             outcome: d.outcome,
             reason_codes: d.reason_codes,
             usage: raw.usage ?? {},

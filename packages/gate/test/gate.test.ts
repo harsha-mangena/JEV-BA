@@ -146,6 +146,24 @@ describe('gate ordering', () => {
     expect(typeOnButton.reason_codes).toEqual(['s2_target_not_eligible']);
   });
 
+  it('uses a calibrated scorer only for the exact decision configuration and supported cohorts', async () => {
+    const calibrated = { version_id: 'cal_1', decision_config_digest: 'cfg', threshold: 0.9, score: () => 0.95, supported: (f: { risk_class: string }) => f.risk_class === 'test_owned_mutation' };
+    const config = { ...HEURISTIC_GATE_V0, calibrated };
+    const act = await evaluateGate(input({ config, decision_config_digest: 'cfg' }));
+    expect(act).toMatchObject({ outcome: 'ACT' });
+    expect(act.reason_codes).toContain('calibrated:cal_1');
+    const low = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, score: () => 0.5 } }, decision_config_digest: 'cfg' }));
+    expect(low).toMatchObject({ outcome: 'ESCALATE', reason_codes: ['calibrated_score_low'] });
+    const cohort = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, supported: () => false } }, decision_config_digest: 'cfg' }));
+    expect(cohort.reason_codes).toEqual(['cohort_uncalibrated']);
+    // Changed model/prompt/extractor: calibration does not apply; heuristic routing, flagged.
+    const stale = await evaluateGate(input({ config, decision_config_digest: 'other' }));
+    expect(stale.reason_codes).toEqual(expect.arrayContaining(['calibration_config_mismatch', 'heuristic_gate_uncalibrated']));
+    // Calibration never overrides permission.
+    const forbidden = await evaluateGate(input({ config, decision_config_digest: 'cfg', scenario_policy: { ...scenarioPolicy, mutations: [] } }));
+    expect(forbidden.outcome).toBe('DENY');
+  });
+
   it('handles WAIT and BLOCKED without a target', async () => {
     expect((await evaluateGate(input({ s1: s1({ WAIT: 1 }, { t0: 1 }) }))).outcome).toBe('REOBSERVE');
     expect((await evaluateGate(input({ s1: s1({ BLOCKED: 1 }, { t0: 1 }) }))).outcome).toBe('ABSTAIN');
