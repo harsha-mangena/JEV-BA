@@ -51,6 +51,7 @@ export const ProjectConfig = z
         token_env: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
       })
       .strict(),
+    retention: z.object({ artifacts_days: z.number().int().positive().default(30) }).strict().default({}),
     status: z
       .object({
         context_prefix: z.string().default('autonomous-qa'),

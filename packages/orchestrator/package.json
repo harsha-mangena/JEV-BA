@@ -12,6 +12,9 @@
     "@qa/integrations": "*",
     "@qa/oracles": "*",
     "@qa/worker": "*",
-    "@qa/coverage": "*"
+    "@qa/coverage": "*",
+    "@qa/evidence": "*",
+    "@qa/quality": "*",
+    "@qa/s1": "*"
   }
 }

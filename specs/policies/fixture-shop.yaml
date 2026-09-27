@@ -4,7 +4,7 @@
 # environment is permitted here. Model scores never grant permission.
 schema_version: 1
 project_id: fixture-shop
-environments: [local, preview, staging]
+environments: [local, preview, staging, production]
 origin_profiles:
   owned_app:
     origins: [$candidate]

@@ -19,6 +19,8 @@
     "@qa/quality": "*",
     "@qa/coverage": "*",
     "@qa/compiler": "*",
-    "@qa/calibration": "*"
+    "@qa/calibration": "*",
+    "@qa/gate": "*",
+    "@qa/s1": "*"
   }
 }

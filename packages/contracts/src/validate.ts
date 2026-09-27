@@ -43,15 +43,24 @@ export const loadFixtureCatalog = (path: string) => loadYaml(FixtureCatalog, pat
  */
 export function validateScenarioSemantics(s: Scenario, catalog: FixtureCatalog, policy: ProjectPolicy): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const fx = catalog.fixtures[s.fixture];
-  if (!fx) issues.push({ path: 'fixture', message: `unknown fixture ${s.fixture}` });
-  else if (fx.role !== s.role) issues.push({ path: 'role', message: `fixture ${s.fixture} provisions role ${fx.role}, not ${s.role}` });
+  const fx = s.fixture ? catalog.fixtures[s.fixture] : undefined;
+  if (s.fixture && !fx) issues.push({ path: 'fixture', message: `unknown fixture ${s.fixture}` });
+  else if (fx && fx.role !== s.role) issues.push({ path: 'role', message: `fixture ${s.fixture} provisions role ${fx.role}, not ${s.role}` });
+  if (!s.fixture) {
+    if (s.role !== 'anonymous') issues.push({ path: 'role', message: 'a scenario without a fixture must use role anonymous' });
+    if (s.cleanup !== 'none') issues.push({ path: 'cleanup', message: 'a scenario without a fixture has nothing to clean up (use cleanup: none)' });
+    if (s.policy.mutations.length) issues.push({ path: 'policy.mutations', message: 'a scenario without test-owned fixtures cannot mutate' });
+  }
 
   const checkRef = (path: string, ref: string | undefined, allowSecret: boolean) => {
     if (ref === undefined) return;
     const { scope, field } = parseRef(ref);
     if (scope === 'secret' && !allowSecret) {
       issues.push({ path, message: `secret reference ${ref} is not allowed here (assertion values are recorded in evidence)` });
+      return;
+    }
+    if (!s.fixture) {
+      issues.push({ path, message: `${ref} cannot resolve: scenario has no fixture` });
       return;
     }
     if (!fx) return;
@@ -104,6 +113,12 @@ export function validateScenarioSemantics(s: Scenario, catalog: FixtureCatalog, 
         case 'order_count_delta':
           checkRef(`${p}.customer_ref`, a.customer_ref, false);
           break;
+        case 'visual_match':
+        case 'a11y_scan':
+        case 'layout_sound':
+        case 'focused':
+        case 'focus_visible':
+          break;
         case 'order_total_minor_units':
           checkRef(`${p}.customer_ref`, a.customer_ref, false);
           checkRef(`${p}.equals_ref`, a.equals_ref, false);
@@ -114,6 +129,7 @@ export function validateScenarioSemantics(s: Scenario, catalog: FixtureCatalog, 
         default:
           break;
       }
+      if (!s.fixture && ['order_count_delta', 'order_total_minor_units', 'entity_count_delta'].includes(a.type)) issues.push({ path: `${p}.type`, message: `${a.type} needs a fixture-backed backend oracle` });
     });
   });
   return issues;

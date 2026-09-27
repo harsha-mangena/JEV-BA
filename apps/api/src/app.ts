@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { ContractError } from '@qa/contracts';
 import { verifyGithubSignature } from '@qa/integrations';
 import { ApiError, type Orchestrator, type Principal } from '@qa/orchestrator';
 
@@ -15,7 +16,7 @@ declare module 'fastify' {
 export const DeploymentEventBody = z
   .object({
     schema_version: z.literal(1),
-    provider: z.enum(['github', 'pipeline', 'manual']),
+    provider: z.enum(['github', 'vercel', 'pipeline', 'manual']),
     project_id: z.string().optional(),
     repository_id: z.union([z.string(), z.number()]).transform(String).optional(),
     deployment_id: z.union([z.string(), z.number()]).transform(String),
@@ -52,6 +53,7 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: err.code, message: err.message, ...(err.detail ? { detail: err.detail } : {}) });
+    if (err instanceof ContractError) return reply.code(400).send({ error: 'invalid_contract', message: err.message, detail: err.issues });
     if (err instanceof z.ZodError) return reply.code(400).send({ error: 'invalid_request', message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
     const status = (err as { statusCode?: number }).statusCode;
     if (status && status < 500) return reply.code(status).send({ error: 'bad_request', message: (err as Error).message });

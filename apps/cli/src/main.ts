@@ -60,6 +60,9 @@ Service commands (need DATABASE_URL):
   serve-api                Run the control API (--port).
   serve-worker             Run a job worker (--out).
 
+System One:
+  s1 probe                 Validate the live provider contract (QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL, QA_S1_API_KEY).
+
 Client commands (need QA_API_TOKEN):
   submit                   Submit a deployment candidate (--api-url, then --github-event <file> or
                            --deployment-id --environment --commit-sha --candidate-url [--provider --project]).
@@ -255,6 +258,9 @@ async function main(): Promise<number> {
       return evalsCmd.evals(positionals[1], values);
     case 'calibrate':
       return evalsCmd.calibrateCmd(values);
+    case 's1':
+      if (positionals[1] === 'probe') return svc.s1Probe();
+      fail('usage: qa s1 probe');
     case 'migrate':
       return svc.migrate();
     case 'bootstrap':

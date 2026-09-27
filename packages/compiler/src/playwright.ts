@@ -66,6 +66,7 @@ function assertion(a: Assertion): string {
  * types the emitter cannot express faithfully are refused, never skipped.
  */
 export function emitPlaywrightSpec(s: Scenario): string {
+  if (!s.fixture) throw new Error('cannot emit a spec for a fixture-less (read-only) scenario; run it with the platform runner');
   const unsupported = s.milestones.flatMap((m) => m.assertions.filter((a) => !SUPPORTED.has(a.type)).map((a) => a.type));
   if (unsupported.length) throw new Error(`cannot emit a faithful spec: unsupported assertion type(s) ${[...new Set(unsupported)].join(', ')}`);
   const body = s.milestones
@@ -94,7 +95,7 @@ const owned = async (kind: 'orders' | 'notes', user: string) => (await api<Recor
 test.use({ baseURL: BASE });
 
 test(${q(`${s.id}: ${s.goal}`)}, async ({ page, context }) => {
-  const fx = await api<Fixture>('POST', '/__qa/fixtures', { name: ${q(s.fixture)} });
+  const fx = await api<Fixture>('POST', '/__qa/fixtures', { name: ${q(s.fixture!)} });
   const consoleErrors: string[] = [];
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => consoleErrors.push(e.message));

@@ -63,11 +63,11 @@ export function validateResponse(req: S1Request, raw: S1RawResponse): Validation
     if (!req.questions.some((q) => q.id === extra)) invalid[extra] = 'answer for a question that was not asked';
   }
   for (const q of req.questions) {
-    const keys = q.kind === 'choice' ? q.options.map((o) => o.key) : ['score'];
-    if (q.kind === 'score') {
-      const p = raw.answers[q.id]?.probabilities?.score;
-      if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) invalid[q.id] = 'invalid score';
-      else answers[q.id] = { distribution: { score: p }, selected: 'score', top: { key: 'score', p }, margin: 0, confidence: null };
+    const keys = q.kind === 'choice' ? q.options.map((o) => o.key) : ['true'];
+    if (q.kind === 'noul') {
+      const p = raw.answers[q.id]?.probabilities?.true;
+      if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) invalid[q.id] = 'invalid noul probability';
+      else answers[q.id] = { distribution: { true: p, false: 1 - p }, selected: p >= 0.5 ? 'true' : 'false', top: { key: p >= 0.5 ? 'true' : 'false', p: Math.max(p, 1 - p) }, margin: Math.abs(2 * p - 1), confidence: null };
       continue;
     }
     if (new Set(keys).size !== keys.length) {

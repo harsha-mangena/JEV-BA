@@ -3,6 +3,9 @@ import type pg from 'pg';
 import { executionDedupKey, ProjectConfig, parseWith, requiredCheckContext, type SelectionManifest } from '@qa/contracts';
 import type { Db } from '@qa/db';
 import { DeploymentVerificationError, type DeploymentClaim, type DeploymentVerifier, type StatusPublisher } from '@qa/integrations';
+import type { ArtifactStore } from '@qa/evidence';
+import type { BaselineStore } from '@qa/quality';
+import type { SystemOneProvider } from '@qa/s1';
 import { loadSuite, selectFullSuite, type LoadedSuite } from './suite.ts';
 import { ApiError, canSeeProject, requireRole, type Principal, type ProjectRow, type RunRow } from './types.ts';
 import { checkCandidateUrl, type Resolver } from './url-policy.ts';
@@ -26,6 +29,12 @@ export interface OrchestratorDeps {
   env?: NodeJS.ProcessEnv;
   /** Change-aware selection; defaults to the full suite. */
   select?(ctx: SelectionContext): Promise<SelectionManifest>;
+  /** Run evidence storage shared by workers, reviews and the dashboard. */
+  artifacts?: ArtifactStore;
+  /** Visual baseline store per project. */
+  baselinesFor?(project: ProjectRow): BaselineStore;
+  /** Wraps the exploration S1 provider per tenant (quotas, circuit breaking). */
+  s1For?(tenantId: string, inner: SystemOneProvider): SystemOneProvider;
 }
 
 export interface SubmitInput extends DeploymentClaim {
@@ -161,6 +170,7 @@ export class Orchestrator {
       commit_sha: verified.commit_sha,
       baseline_sha: baseline?.commit_sha ?? null,
     });
+    if (envCfg.read_only) restrictToReadOnly(manifest, suite);
     const profileSet = [...new Set(manifest.cases.map((c) => c.execution_profile))].sort().join('+') || 'none';
     const dedupKey = executionDedupKey({ tenant_id: project.tenant_id, project_id: project.id, provider: input.provider, deployment_id: verified.deployment_id, suite_revision: suite.revision, execution_profile: profileSet });
 
@@ -212,7 +222,7 @@ export class Orchestrator {
 
   async getRun(p: Principal, id: string) {
     const run = await this.visibleRun(p, id);
-    const cases = (await this.db.query('select attempt, shard, scenario_id, execution_profile, verdict, result from case_results where run_id=$1 order by attempt, scenario_id, execution_profile', [id])).rows;
+    const cases = (await this.db.query('select attempt, shard, scenario_id, execution_profile, verdict, result, run_dir from case_results where run_id=$1 order by attempt, scenario_id, execution_profile', [id])).rows;
     const deployment = await this.db.one('select provider, provider_deployment_id, environment, immutable_url, commit_sha from deployments where id=$1', [run.deployment_id]);
     return { run, deployment, cases };
   }
@@ -286,4 +296,15 @@ export class Orchestrator {
   statusContext(project: ProjectRow, environment: string): string {
     return requiredCheckContext(project.config, project.id, environment);
   }
+}
+
+/** Production (read-only) environments run only fixture-less, non-mutating regression scenarios. */
+export function restrictToReadOnly(manifest: SelectionManifest, suite: LoadedSuite): void {
+  const ok = new Set(suite.scenarios.filter((s) => !s.fixture && s.policy.mutations.length === 0 && s.milestones.every((m) => m.steps.every((st) => !st.intent))).map((s) => s.id));
+  const dropped = [...new Set(manifest.cases.filter((c) => !ok.has(c.scenario_id)).map((c) => c.scenario_id))];
+  manifest.cases = manifest.cases.filter((c) => ok.has(c.scenario_id));
+  for (const id of dropped) manifest.omitted.push({ scenario_id: id, reason: 'read-only environment: scenario provisions fixtures or mutates' });
+  for (const e of manifest.exploration) manifest.omitted.push({ scenario_id: e.scenario_id, reason: 'read-only environment: exploration disabled' });
+  manifest.exploration = [];
+  manifest.explanation.push('read-only capability profile applied');
 }

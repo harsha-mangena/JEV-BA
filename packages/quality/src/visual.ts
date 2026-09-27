@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { Locator as PwLocator, Page } from '@playwright/test';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
+import type { ArtifactStore } from '@qa/evidence';
 
 export interface BaselineKey {
   scenario_id: string;
@@ -149,3 +150,43 @@ export async function ensureDir(p: string): Promise<void> {
   await mkdir(dirname(p), { recursive: true });
 }
 export { copyFile };
+
+/** Baseline store over any artifact store (filesystem or S3-compatible), under a tenant/project prefix. */
+export class ArtifactBaselineStore implements BaselineStore {
+  constructor(
+    private readonly store: ArtifactStore,
+    private readonly prefix: string,
+  ) {}
+
+  private base(k: BaselineKey) {
+    return [this.prefix, safe(k.scenario_id), safe(k.checkpoint), safe(k.execution_profile), safe(k.rendering_profile)].join('/');
+  }
+
+  async get(key: BaselineKey) {
+    const cur = await this.store.get(`${this.base(key)}/current.json`);
+    if (!cur) return null;
+    const record = JSON.parse(cur.toString('utf8')) as BaselineRecord;
+    const png = await this.store.get(`${this.base(key)}/v${record.version}.png`);
+    if (!png || sha256(png) !== record.sha256) throw new Error(`baseline ${this.base(key)} failed its integrity check`);
+    return { record, png };
+  }
+
+  async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string }): Promise<BaselineRecord> {
+    if (!a.approved_by.trim()) throw new Error('approval requires an approver');
+    if (!/^[0-9a-f]{40}$/.test(a.commit_sha)) throw new Error('approval must be tied to a full commit SHA');
+    if (sha256(candidate) !== a.expected_sha256) throw new Error('candidate image does not match the checksum recorded in run evidence');
+    const png = PNG.sync.read(candidate);
+    const prev = await this.get(key);
+    const version = (prev?.record.version ?? 0) + 1;
+    const record: BaselineRecord = { key, sha256: a.expected_sha256, width: png.width, height: png.height, approved_by: a.approved_by, approved_at: new Date().toISOString(), commit_sha: a.commit_sha, deployment_id: a.deployment_id ?? null, source: a.source, version };
+    await this.store.put(`${this.base(key)}/v${version}.png`, candidate, 'image/png');
+    await this.store.put(`${this.base(key)}/v${version}.json`, Buffer.from(JSON.stringify(record, null, 2)), 'application/json');
+    await this.store.put(`${this.base(key)}/current.json`, Buffer.from(JSON.stringify(record, null, 2)), 'application/json');
+    return record;
+  }
+
+  async list(): Promise<BaselineRecord[]> {
+    const keys = (await this.store.list(this.prefix)).filter((k) => k.endsWith('/current.json'));
+    return Promise.all(keys.map(async (k) => JSON.parse((await this.store.get(k))!.toString('utf8')) as BaselineRecord));
+  }
+}

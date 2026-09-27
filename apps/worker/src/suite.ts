@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser } from '@playwright/test';
-import { launchBrowser } from '@qa/browser';
+import { EXECUTION_PROFILES, launchBrowser, type BrowserName } from '@qa/browser';
 import { combineAttempts, evaluateReleaseGate, type CaseResult, type ExecutionProfileId, type ProjectPolicy, type RunReport, type Scenario } from '@qa/contracts';
 import { toHtml, toJUnit } from '@qa/evidence';
 import type { FixtureClient } from '@qa/oracles';
@@ -36,6 +36,9 @@ export interface SuiteOptions {
   cases?: Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
   hooks?: AttemptHooks;
   quality?: QualityOptions;
+  readOnly?: boolean;
+  /** Reads the target's deployed revision; defaults to the fixture service's version endpoint. */
+  revision?: () => Promise<string | null>;
 }
 
 export interface SuiteResult {
@@ -69,9 +72,9 @@ function stubCase(p: PlannedCase, verdict: CaseResult['verdict'], reason: CaseRe
   };
 }
 
-async function reportedRevision(fixtures: FixtureClient): Promise<string | null> {
+async function reportedRevision(o: Pick<SuiteOptions, 'fixtures' | 'revision'>): Promise<string | null> {
   try {
-    return (await fixtures.version()).commit_sha;
+    return o.revision ? await o.revision() : (await o.fixtures.version()).commit_sha;
   } catch {
     return null;
   }
@@ -95,12 +98,18 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
   const expected = planned.map((p) => ({ scenario_id: p.scenario.id, execution_profile: p.profile }));
   let cases: CaseResult[] = [];
 
-  const before = o.commitSha ? await reportedRevision(o.fixtures) : null;
+  const before = o.commitSha ? await reportedRevision(o) : null;
   if (o.commitSha && before !== o.commitSha) {
     const why = before === null ? 'target revision could not be verified' : `target reports ${before}, expected ${o.commitSha}`;
     cases = planned.map((p) => stubCase(p, 'BLOCKED', 'version_drift', why));
   } else {
-    const browser = o.browser ?? (await launchBrowser());
+    const browsers = new Map<BrowserName, Promise<Browser>>();
+    if (o.browser) browsers.set('chromium', Promise.resolve(o.browser));
+    const browserFor = (name: BrowserName) => {
+      let b = browsers.get(name);
+      if (!b) browsers.set(name, (b = launchBrowser(name)));
+      return b;
+    };
     try {
       const queue = [...planned];
       const worker = async () => {
@@ -110,8 +119,18 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
             continue;
           }
           const attempts: CaseResult[] = [];
+          const browserName = EXECUTION_PROFILES[next.profile].browser;
+          let browser: Browser;
+          try {
+            browser = await browserFor(browserName);
+          } catch (e) {
+            const stub = stubCase(next, 'BLOCKED', 'unsupported_capability', `${browserName} is not available on this runner: ${(e as Error).message.split('\n')[0]}`);
+            cases.push(stub);
+            o.onCase?.(stub);
+            continue;
+          }
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.readOnly ? { readOnly: true } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
           }
@@ -132,10 +151,10 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
       };
       await Promise.all(Array.from({ length: Math.max(1, o.concurrency ?? 1) }, worker));
     } finally {
-      if (!o.browser) await browser.close();
+      for (const [name, b] of browsers) if (!(o.browser && name === 'chromium')) await b.then((x) => x.close()).catch(() => undefined);
     }
     if (o.commitSha) {
-      const after = await reportedRevision(o.fixtures);
+      const after = await reportedRevision(o);
       if (after !== o.commitSha) {
         cases = cases.map((c) => ({ ...c, verdict: 'SUPERSEDED', reason: 'version_drift', message: `target revision changed during the run (now ${after ?? 'unknown'})` }));
       }

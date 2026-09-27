@@ -106,10 +106,10 @@ describe('scenario semantics', () => {
   it('rejects an unknown origin profile and environment', () => {
     const s = baseScenario();
     s.policy.allowed_origin_profile = 'somewhere_else';
-    s.policy.environments = ['production'];
+    s.policy.environments = ['mars'];
     const msgs = semantic(s).map((i) => i.message).join('\n');
     expect(msgs).toMatch(/unknown origin profile/);
-    expect(msgs).toMatch(/environment production is not configured/);
+    expect(msgs).toMatch(/environment mars is not configured/);
   });
 
   it('forbids secret references in assertions', () => {

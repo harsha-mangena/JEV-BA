@@ -3,7 +3,11 @@ import type pg from 'pg';
 import { evaluateReleaseGate, type CaseResult, type ExecutionProfileId } from '@qa/contracts';
 import { FixtureClient } from '@qa/oracles';
 import { runSuite, type ExplorationOptions } from '@qa/worker';
-import { checkReadiness } from './readiness.ts';
+import { basename } from 'node:path';
+import { uploadDir } from '@qa/evidence';
+import { FindingLedger } from '@qa/quality';
+import { checkReadiness, readRevision } from './readiness.ts';
+import { Sweeper } from './sweepers.ts';
 import { newId, type Orchestrator } from './service.ts';
 import { loadSuite, shard } from './suite.ts';
 import type { ProjectRow, RunRow } from './types.ts';
@@ -27,6 +31,8 @@ export interface WorkerOptions {
   exploration?: ExplorationOptions;
   env?: NodeJS.ProcessEnv;
   log?: (msg: string) => void;
+  /** Run cleanup and retention sweeps this often in `run()` (default 5 minutes). */
+  sweepIntervalMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -127,7 +133,13 @@ export class JobWorker {
   }
 
   async run(pollMs = 1000): Promise<void> {
+    const sweeper = new Sweeper(this.orch, { ...(this.o.env ? { env: this.o.env } : {}), alert: (m) => this.log(m) });
+    let lastSweep = 0;
     while (!this.stopped) {
+      if (Date.now() - lastSweep > (this.o.sweepIntervalMs ?? 300_000)) {
+        lastSweep = Date.now();
+        await sweeper.runOnce().catch((e: Error) => this.log(`sweep error: ${e.message}`));
+      }
       const did = await this.processOne().catch((e: Error) => (this.log(`loop error: ${e.message}`), false));
       await this.publishOutbox().catch((e: Error) => this.log(`outbox error: ${e.message}`));
       if (!did) await sleep(pollMs);
@@ -213,9 +225,10 @@ export class JobWorker {
     const suite = await loadSuite(cfg, this.orch.deps.suiteBaseDir);
     if (suite.revision !== run.suite_revision) throw new Error(`suite changed since selection (${run.suite_revision} → ${suite.revision})`);
     const env = this.o.env ?? process.env;
+    const readOnly = cfg.environments[run.environment]?.read_only === true;
     const token = env[cfg.fixture_api.token_env];
-    if (!token) throw new Error(`fixture token variable ${cfg.fixture_api.token_env} is not set`);
-    const fixtures = new FixtureClient(cfg.fixture_api.url ?? url, token);
+    if (!token && !readOnly) throw new Error(`fixture token variable ${cfg.fixture_api.token_env} is not set`);
+    const fixtures = new FixtureClient(cfg.fixture_api.url ?? url, token ?? 'read-only-profile-has-no-fixture-access');
     const cases = job.payload.cases as Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
     const advisory = job.payload.advisory === true;
 
@@ -229,8 +242,11 @@ export class JobWorker {
         .catch(() => undefined);
     }, this.o.cancelPollMs ?? 1000);
     let results: CaseResult[];
+    let runDirKey: string;
+    const ledger = new FindingLedger();
     try {
-      const { report } = await runSuite({
+      const { report, runDir } = await runSuite({
+        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha },
         scenarios: suite.scenarios.filter((s) => cases.some((c) => c.scenario_id === s.id)),
         policy: suite.policy,
         baseUrl: url,
@@ -239,13 +255,15 @@ export class JobWorker {
         outDir: this.o.outDir,
         runId: `${run.id}.a${run.attempt}.s${String(job.payload.shard)}`,
         commitSha: run.commit_sha,
+        revision: () => readRevision(url, cfg.version_check),
         deploymentId: run.deployment_id,
         cases,
         retries: cfg.suite.retries,
         concurrency: cfg.suite.concurrency,
         signal: ac.signal,
+        ...(readOnly ? { readOnly: true } : {}),
         ...(cfg.suite.signed_out_path ? { signedOutPath: cfg.suite.signed_out_path } : {}),
-        ...(advisory && this.o.exploration ? { exploration: this.o.exploration } : {}),
+        ...(advisory && this.o.exploration ? { exploration: { ...this.o.exploration, s1: this.orch.deps.s1For?.(run.tenant_id, this.o.exploration.s1) ?? this.o.exploration.s1 } } : {}),
         hooks: {
           fixtureProvisioned: async (fixtureId) => {
             await this.db.query(`insert into cleanup_tasks(tenant_id, project_id, run_id, fixture_id, fixture_api_url) values ($1,$2,$3,$4,$5) on conflict (fixture_id) do nothing`, [run.tenant_id, project.id, run.id, fixtureId, cfg.fixture_api.url ?? url]);
@@ -256,6 +274,11 @@ export class JobWorker {
         },
       });
       results = report.cases;
+      const store = this.orch.deps.artifacts;
+      if (store) {
+        runDirKey = `${run.tenant_id}/${project.id}/${basename(runDir)}`;
+        await uploadDir(store, runDir, runDirKey);
+      } else runDirKey = runDir;
     } finally {
       clearInterval(poll);
     }
@@ -267,8 +290,19 @@ export class JobWorker {
       if (cur.attempt === run.attempt) {
         for (const r of results) {
           await c.query(
-            `insert into case_results(run_id, attempt, shard, scenario_id, execution_profile, verdict, result) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`,
-            [run.id, run.attempt, Number(job.payload.shard), r.scenario_id, r.execution_profile, r.verdict, JSON.stringify({ ...r, advisory })],
+            `insert into case_results(run_id, attempt, shard, scenario_id, execution_profile, verdict, result, run_dir) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
+            [run.id, run.attempt, Number(job.payload.shard), r.scenario_id, r.execution_profile, r.verdict, JSON.stringify({ ...r, advisory }), runDirKey],
+          );
+        }
+        for (const f of ledger.all()) {
+          await c.query(
+            `insert into findings(tenant_id, project_id, fingerprint, kind, scenario_id, checkpoint, execution_profile, requirement_ids, certainty, summary, occurrences, commits, evidence)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+             on conflict (project_id, fingerprint) do update set occurrences = findings.occurrences + excluded.occurrences, last_seen = now(),
+               commits = (select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(findings.commits || excluded.commits) x),
+               evidence = (findings.evidence || excluded.evidence),
+               certainty = case when findings.certainty = 'confirmed' or excluded.certainty = 'confirmed' then 'confirmed' when findings.certainty = 'reproduced' or excluded.certainty = 'reproduced' then 'reproduced' else 'suspected' end`,
+            [run.tenant_id, project.id, f.fingerprint, f.kind, f.scenario_id, f.checkpoint, f.execution_profile, JSON.stringify(f.requirement_ids), f.certainty, f.summary, f.occurrences, JSON.stringify(f.commits), JSON.stringify(f.evidence.map((e) => ({ run_id: run.id, evidence: e })))],
           );
         }
       }
@@ -337,7 +371,9 @@ export class JobWorker {
           if (ev.kind !== 'publish_status') throw new Error(`unknown outbox kind ${ev.kind}`);
           const run = (await c.query<RunRow>('select * from runs where id=$1', [ev.payload.run_id])).rows[0]!;
           const project = (await this.orch.projectById(run.project_id))!;
+          const dep = (await c.query<{ provider: string; provider_deployment_id: string }>('select provider, provider_deployment_id from deployments where id=$1', [run.deployment_id])).rows[0];
           await this.orch.deps.publisherFor(project).publish({
+            ...(dep ? { provider: dep.provider, deployment_provider_id: dep.provider_deployment_id } : {}),
             repository: project.repository_full_name,
             sha: run.commit_sha,
             context: this.orch.statusContext(project, run.environment),

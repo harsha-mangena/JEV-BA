@@ -49,3 +49,10 @@ export async function checkReadiness(baseUrl: string, v: VersionCheck, expectedS
   checks.push({ check: 'revision_matches', ok: match, detail: `expected ${expectedSha}, reported ${reported}` });
   return { ready: match, revision_mismatch: !match, checks };
 }
+
+/** The revision the target currently reports via the project's version check, or null. */
+export async function readRevision(baseUrl: string, v: VersionCheck): Promise<string | null> {
+  const r = await checkReadiness(baseUrl, v, '\u0000');
+  const reported = r.checks.find((c) => c.check === 'revision_reported');
+  return reported?.ok ? (reported.detail ?? null) : null;
+}

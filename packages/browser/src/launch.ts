@@ -1,13 +1,16 @@
 import { existsSync } from 'node:fs';
-import { chromium, type Browser } from '@playwright/test';
+import { chromium, firefox, webkit, type Browser } from '@playwright/test';
+import type { BrowserName } from './profiles.ts';
 
 /**
- * Launch the pinned Chromium. `QA_CHROMIUM_EXECUTABLE` overrides the binary
- * for environments that pre-install a matching browser outside Playwright's
- * cache.
+ * Launch a pinned browser. `QA_CHROMIUM_EXECUTABLE` / `QA_FIREFOX_EXECUTABLE` /
+ * `QA_WEBKIT_EXECUTABLE` override the binary for environments that
+ * pre-install a matching build outside Playwright's cache.
  */
-export async function launchBrowser(): Promise<Browser> {
-  const executablePath = process.env.QA_CHROMIUM_EXECUTABLE;
-  if (executablePath && !existsSync(executablePath)) throw new Error(`QA_CHROMIUM_EXECUTABLE does not exist: ${executablePath}`);
-  return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+export async function launchBrowser(name: BrowserName = 'chromium'): Promise<Browser> {
+  const envName = `QA_${name.toUpperCase()}_EXECUTABLE`;
+  const executablePath = process.env[envName];
+  if (executablePath && !existsSync(executablePath)) throw new Error(`${envName} does not exist: ${executablePath}`);
+  const type = { chromium, firefox, webkit }[name];
+  return type.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 }

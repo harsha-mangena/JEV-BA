@@ -36,6 +36,8 @@ export interface AttemptOptions {
   /** Durable cleanup obligations: called as soon as a fixture exists, and when cleanup settles. */
   hooks?: AttemptHooks;
   quality?: QualityOptions;
+  /** Read-only capability profile (production checks): nothing provisioned, only read-only actions permitted. */
+  readOnly?: boolean;
 }
 
 export interface QualityOptions {
@@ -66,7 +68,7 @@ export interface Session {
   readonly attemptId: string;
   readonly page: Page;
   readonly log: EvidenceLog;
-  readonly fixture: ProvisionedFixture;
+  readonly fixture: ProvisionedFixture | null;
   readonly baseline: EntityBaseline;
   readonly consoleErrors: string[];
   readonly completed: string[];
@@ -117,23 +119,26 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
   try {
     if (!s.policy.environments.includes(o.environment)) throw new Stop('BLOCKED', 'policy_denied', `scenario is not permitted in environment ${o.environment}`);
 
-    try {
-      fixture = await o.fixtures.provision(s.fixture);
-    } catch (e) {
-      throw new Stop('ERROR', 'fixture_error', `fixture ${s.fixture}: ${(e as Error).message}`);
+    if (o.readOnly && (s.fixture || s.policy.mutations.length)) throw new Stop('BLOCKED', 'policy_denied', 'read-only profile: scenarios may not provision fixtures or mutate');
+    if (s.fixture) {
+      try {
+        fixture = await o.fixtures.provision(s.fixture);
+      } catch (e) {
+        throw new Stop('ERROR', 'fixture_error', `fixture ${s.fixture}: ${(e as Error).message}`);
+      }
+      await o.hooks?.fixtureProvisioned?.(fixture.fixture_id);
+      for (const v of Object.values(fixture.secrets)) log.redactor.register(v);
+      for (const c of fixture.auth?.cookies ?? []) log.redactor.register(c.value);
+      log.record('fixture_provisioned', `fixture ${fixture.name}`, { fixture_id: fixture.fixture_id, fields: Object.keys(fixture.data), signed_in: !!fixture.auth });
     }
-    await o.hooks?.fixtureProvisioned?.(fixture.fixture_id);
-    for (const v of Object.values(fixture.secrets)) log.redactor.register(v);
-    for (const c of fixture.auth?.cookies ?? []) log.redactor.register(c.value);
-    log.record('fixture_provisioned', `fixture ${fixture.name}`, { fixture_id: fixture.fixture_id, fields: Object.keys(fixture.data), signed_in: !!fixture.auth });
 
-    const owner = fixture.data.customer_id;
+    const owner = fixture?.data.customer_id;
     const baseline = await captureBaseline(o.fixtures, owner === undefined ? [] : [String(owner)]).catch((e: Error) => {
       throw new Stop('ERROR', 'fixture_error', `baseline read failed: ${e.message}`);
     });
 
     const allowed = resolveAllowedOrigins(o.policy, s.policy.allowed_origin_profile, new URL(o.baseUrl).origin);
-    context = await o.browser.newContext({ ...EXECUTION_PROFILES[profile], baseURL: o.baseUrl });
+    context = await o.browser.newContext({ ...EXECUTION_PROFILES[profile].options, baseURL: o.baseUrl });
     await context.route('**/*', async (route) => {
       const req = route.request();
       const url = new URL(req.url());
@@ -142,7 +147,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       if (req.isNavigationRequest() && req.frame() === page?.mainFrame()) blockedNavigation = url.origin;
       return route.abort('blockedbyclient');
     });
-    if (fixture.auth) await context.addCookies(fixture.auth.cookies.map((c) => ({ ...c, url: o.baseUrl })));
+    if (fixture?.auth) await context.addCookies(fixture.auth.cookies.map((c) => ({ ...c, url: o.baseUrl })));
 
     if (usesSecrets(s)) log.record('policy', 'trace capture disabled: scenario types secret values', {});
     else {
@@ -160,7 +165,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       if (f === p.mainFrame()) log.record('navigation', `navigated to ${new URL(f.url()).pathname}`, { path: new URL(f.url()).pathname });
     });
 
-    const fx = fixture;
+    const fx = fixture ?? null;
     const session: Session = {
       o,
       attemptId,
@@ -173,6 +178,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       deadline,
       resolveValue(ref) {
         const { scope, field } = parseRef(ref);
+        if (!fx) throw new Stop('ERROR', 'fixture_error', `${ref} requested but the scenario has no fixture`);
         const v = scope === 'secret' ? fx.secrets[field] : fx.data[field];
         if (v === undefined) throw new Stop('ERROR', 'fixture_error', `${ref} was not provisioned`);
         return String(v);
@@ -190,7 +196,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
           try {
             r = await evaluateAssertion(a, {
               page: p,
-              fixtureData: fx.data,
+              fixtureData: fx?.data ?? {},
               fixtures: o.fixtures,
               baseline,
               consoleErrors,
@@ -234,7 +240,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
 
     const response = await p.goto(s.start_path, { waitUntil: 'load', timeout: s.budgets.action_timeout_ms * 2 });
     session.checkpoint();
-    if (fixture.auth && o.signedOutPath && new URL(p.url()).pathname === o.signedOutPath) {
+    if (fixture?.auth && o.signedOutPath && new URL(p.url()).pathname === o.signedOutPath) {
       throw new Stop('BLOCKED', 'auth_unavailable', `supplied session was not accepted: redirected to ${o.signedOutPath}`);
     }
     if (response && response.status() >= 500) throw new Stop('FAIL', 'step_failed', `start page returned HTTP ${response.status()}`);

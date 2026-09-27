@@ -16,13 +16,14 @@ export interface ChoiceQuestion {
   options: ChoiceOption[];
 }
 
-export interface ScoreQuestion {
+/** Yes/no question: the answer is the probability that the statement is true (provider "Noul"). */
+export interface NoulQuestion {
   id: string;
-  kind: 'score';
+  kind: 'noul';
   prompt: string;
 }
 
-export type Question = ChoiceQuestion | ScoreQuestion;
+export type Question = ChoiceQuestion | NoulQuestion;
 
 export interface S1Request {
   model: string;
@@ -32,7 +33,7 @@ export interface S1Request {
 }
 
 export interface S1RawAnswer {
-  /** Choice: probability per option key. Score: `{ score: p }`. */
+  /** Choice: probability per option key. Noul: `{ true: p }`. */
   probabilities: Record<string, unknown>;
   selected?: unknown;
   confidence?: unknown;

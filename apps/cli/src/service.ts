@@ -3,6 +3,9 @@ import { parse as parseYaml } from 'yaml';
 import { buildApi } from '@qa/api';
 import { Db } from '@qa/db';
 import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
+import { CalibrationRegistry, withCalibration } from '@qa/calibration';
+import { HEURISTIC_GATE_V0 } from '@qa/gate';
+import { HttpS1Provider, probeRequest, TypeSafeProvider, validateResponse, type SystemOneProvider } from '@qa/s1';
 
 export interface ServiceArgs {
   [k: string]: string | string[] | boolean | undefined;
@@ -75,7 +78,8 @@ export async function serveApi(a: ServiceArgs): Promise<number> {
 export async function serveWorker(a: ServiceArgs): Promise<number> {
   const db = dbFromEnv();
   const orch = new Orchestrator(depsFromEnv(db));
-  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m) });
+  const exploration = await explorationFromEnv();
+  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m), ...(exploration ? { exploration } : {}) });
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => worker.stop());
   await worker.run();
   await db.close();
@@ -156,4 +160,38 @@ export async function wait(a: ServiceArgs): Promise<number> {
     }
     await new Promise((res) => setTimeout(res, 5000));
   }
+}
+
+/** S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_ENDPOINT, QA_S1_API_KEY, QA_S1_MODEL. */
+export function s1FromEnv(): { provider: SystemOneProvider; model: string } | null {
+  const kind = process.env.QA_S1_PROVIDER;
+  if (!kind) return null;
+  const endpoint = need(process.env.QA_S1_ENDPOINT, 'QA_S1_ENDPOINT');
+  const model = need(process.env.QA_S1_MODEL, 'QA_S1_MODEL');
+  if (kind === 'typesafe') return { provider: new TypeSafeProvider({ endpoint, apiKey: need(process.env.QA_S1_API_KEY, 'QA_S1_API_KEY') }), model };
+  if (kind === 'http') return { provider: new HttpS1Provider('http', { endpoint, ...(process.env.QA_S1_API_KEY ? { apiKey: process.env.QA_S1_API_KEY } : {}) }), model };
+  throw new UsageError(`unknown QA_S1_PROVIDER ${kind}`);
+}
+
+async function explorationFromEnv() {
+  const s1 = s1FromEnv();
+  if (!s1) return null;
+  const cal = process.env.QA_CALIBRATION_DIR ? await new CalibrationRegistry(process.env.QA_CALIBRATION_DIR).current() : null;
+  return { s1: s1.provider, model: s1.model, gate: withCalibration(HEURISTIC_GATE_V0, cal) };
+}
+
+/** Send a tiny request and validate the response strictly — run before enabling autonomy. */
+export async function s1Probe(): Promise<number> {
+  const s1 = s1FromEnv();
+  if (!s1) throw new UsageError('set QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL (and QA_S1_API_KEY)');
+  const req = probeRequest(s1.model);
+  const started = Date.now();
+  const raw = await s1.provider.ask(req);
+  const v = validateResponse(req, raw);
+  console.log(JSON.stringify({ provider: s1.provider.id, resolved_model: v.resolvedModel, elapsed_ms: Date.now() - started, valid_heads: Object.keys(v.answers), invalid_heads: v.invalid, op: v.answers.op?.distribution ?? null }, null, 2));
+  if (Object.keys(v.invalid).length) {
+    console.error('Contract mismatch: fix the adapter mapping before enabling autonomy.');
+    return 1;
+  }
+  return 0;
 }

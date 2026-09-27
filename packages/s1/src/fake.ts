@@ -29,7 +29,7 @@ export class KeywordProvider implements SystemOneProvider {
     const answers: S1RawResponse['answers'] = {};
     for (const q of req.questions) {
       if (q.kind !== 'choice') {
-        answers[q.id] = { probabilities: { score: 0.5 } };
+        answers[q.id] = { probabilities: { true: 0.5 } };
         continue;
       }
       const wants = this.prefer(req, q).map((w) => w.toLowerCase());

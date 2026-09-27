@@ -102,7 +102,7 @@ export const Milestone = z
   .strict();
 export type Milestone = z.output<typeof Milestone>;
 
-export const ExecutionProfileId = z.enum(['chromium_desktop', 'chromium_mobile_viewport']);
+export const ExecutionProfileId = z.enum(['chromium_desktop', 'chromium_mobile_viewport', 'firefox_desktop', 'webkit_desktop']);
 export type ExecutionProfileId = z.infer<typeof ExecutionProfileId>;
 
 export const ScenarioPolicy = z
@@ -138,7 +138,8 @@ export const Scenario = z
     mode: z.enum(['regression', 'exploration']),
     critical: z.boolean().default(false),
     start_path: z.string().startsWith('/'),
-    fixture: Slug,
+    /** Omitted for read-only checks (e.g. production smoke): nothing is provisioned and backend oracles are unavailable. */
+    fixture: Slug.optional(),
     role: z.string().min(1),
     goal: z.string().min(1),
     milestones: z.array(Milestone).min(1, 'a scenario must have at least one milestone'),

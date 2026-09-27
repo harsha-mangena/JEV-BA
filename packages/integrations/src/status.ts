@@ -7,6 +7,9 @@ export interface CommitStatus {
   state: 'pending' | 'success' | 'failure' | 'error';
   description: string;
   target_url?: string;
+  /** Provider-side deployment id (for providers whose checks attach to deployments, e.g. Vercel). */
+  deployment_provider_id?: string;
+  provider?: string;
 }
 
 export interface StatusPublisher {

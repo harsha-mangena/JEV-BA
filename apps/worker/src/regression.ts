@@ -1,5 +1,5 @@
 import { describeStep, executeStep, observe } from '@qa/browser';
-import { authorizeIntent, type RiskClass, type Step } from '@qa/contracts';
+import { authorizeIntent, bindControl, type RiskClass, type Step } from '@qa/contracts';
 import { Stop, type Driver } from './session.ts';
 
 function riskOf(step: Step, mutation: string | undefined): RiskClass {
@@ -30,6 +30,14 @@ export const regressionDriver: Driver = async (session) => {
         milestone_id: m.id,
         step_index: stepIndex,
       };
+      if (auth.allowed && o.readOnly) {
+        const bound = 'target' in step && 'role' in step.target ? bindControl(o.policy, { role: step.target.role, name: step.target.name }).risk_class : null;
+        const readOnlyStep = step.op === 'navigate' || step.op === 'reload' || (step.op === 'press' && !['Enter', 'Space'].includes(step.key)) || (step.op === 'click' && !step.intent && bound === 'read_only');
+        if (!readOnlyStep) {
+          log.record('intent', `denied (read-only profile): ${intent.description}`, { ...intent, state: 'denied', policy_decision: 'denied' });
+          throw new Stop('BLOCKED', 'policy_denied', `read-only profile permits only navigation and controls bound read_only; refused: ${intent.description}`);
+        }
+      }
       if (!auth.allowed) {
         log.record('intent', `denied: ${intent.description}`, { ...intent, state: 'denied', policy_decision: 'denied', reason: auth.reason });
         throw new Stop('BLOCKED', 'policy_denied', auth.reason);

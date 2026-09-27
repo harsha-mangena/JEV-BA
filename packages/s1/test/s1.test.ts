@@ -83,7 +83,7 @@ describe('response validation', () => {
     questions: [
       { id: 'op', kind: 'choice', prompt: 'p', options: [{ key: 'CLICK', label: 'CLICK' }, { key: 'DONE', label: 'DONE' }] },
       { id: 'click_target', kind: 'choice', prompt: 'p', options: [{ key: 't0', label: 'a' }, { key: NONE, label: 'n' }] },
-      { id: 'done_score', kind: 'score', prompt: 'p' },
+      { id: 'done_score', kind: 'noul', prompt: 'p' },
     ],
   };
   const good = () => ({
@@ -91,7 +91,7 @@ describe('response validation', () => {
     answers: {
       op: { probabilities: { CLICK: 0.9, DONE: 0.1 }, confidence: 0.8 },
       click_target: { probabilities: { t0: 0.7, [NONE]: 0.3 } },
-      done_score: { probabilities: { score: 0.2 } },
+      done_score: { probabilities: { true: 0.2 } },
     },
   });
 
@@ -140,9 +140,10 @@ describe('response validation', () => {
     expect(Object.keys(validateResponse(req, {} as never).invalid)).toEqual(['op', 'click_target', 'done_score']);
   });
 
-  it('validates score heads', () => {
+  it('validates yes/no (noul) heads', () => {
     const raw = good();
-    raw.answers.done_score = { probabilities: { score: 2 } };
-    expect(validateResponse(req, raw).invalid.done_score).toBe('invalid score');
+    raw.answers.done_score = { probabilities: { true: 2 } };
+    expect(validateResponse(req, raw).invalid.done_score).toBe('invalid noul probability');
+    expect(validateResponse(req, good()).answers.done_score).toMatchObject({ selected: 'false', distribution: { true: 0.2, false: 0.8 } });
   });
 });
