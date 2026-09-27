@@ -9,6 +9,8 @@ import {
   StaticTokenProvider,
   type TokenProvider,
 } from '@qa/integrations';
+import { GitDiffProvider, GitHubDiffProvider } from '@qa/coverage';
+import { impactSelector } from './impact.ts';
 import type { OrchestratorDeps } from './service.ts';
 import type { ProjectRow } from './types.ts';
 
@@ -40,7 +42,12 @@ export function depsFromEnv(db: Db, env: NodeJS.ProcessEnv = process.env): Orche
     }
     return c;
   };
+  const baseDir = env.QA_SUITE_BASE_DIR ?? process.cwd();
   return {
+    select: impactSelector({
+      baseDir,
+      diffFor: (ctx) => (env.QA_REPO_DIR ? new GitDiffProvider(env.QA_REPO_DIR) : ctx.project.repository_full_name ? new GitHubDiffProvider(clientFor(ctx.project), ctx.project.repository_full_name) : null),
+    }),
     db,
     env,
     suiteBaseDir: env.QA_SUITE_BASE_DIR ?? process.cwd(),

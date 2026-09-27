@@ -250,3 +250,42 @@ describe.skipIf(!DATABASE_URL)('deployment-triggered orchestration', () => {
     expect((await getRun(h, liar.json().run_id)).run).toMatchObject({ state: 'ERROR', reason: 'version_drift' });
   });
 });
+
+describe.skipIf(!DATABASE_URL)('change-aware selection in the service', () => {
+  it('first run is full (no baseline); a notes-only change runs notes coverage plus smoke', async () => {
+    const { impactSelector } = await import('@qa/orchestrator');
+    const { GitHubDiffProvider } = await import('@qa/coverage');
+    const { GitHubClient, StaticTokenProvider } = await import('@qa/integrations');
+    const { ROOT } = await import('./helpers.ts');
+    let gh!: Harness['gh'];
+    const config = projectConfig({
+      suite: {
+        specs_dir: 'specs', policy_file: 'specs/policies/fixture-shop.yaml', fixture_catalog: 'specs/fixtures.yaml', coverage_file: 'specs/coverage.yaml',
+        profiles: ['chromium_desktop'], scenarios: ['checkout_existing_customer', 'notes_crud', 'settings_preference_persists'], shards: 1, concurrency: 3, signed_out_path: '/login',
+      },
+    });
+    const h = await setup(config, {
+      deps: { select: impactSelector({ baseDir: ROOT, diffFor: (ctx) => new GitHubDiffProvider(new GitHubClient(new StaticTokenProvider('gh-test-token'), gh.url), ctx.project.repository_full_name!) }) },
+    });
+    gh = h.gh;
+    const a = await app(SHA_A);
+    h.gh.deploy(301, SHA_A, 'preview', a.url);
+    const first = (await submit(h, githubEvent(301, SHA_A))).json().run_id;
+    await h.worker.drain();
+    const r1 = (await getRun(h, first)).run;
+    expect(r1.selection_manifest.strategy).toBe('full');
+    expect(r1.selection_manifest.gaps).toContainEqual(expect.objectContaining({ kind: 'missing_comparison' }));
+    expect(r1.gate.eligible).toBe(true);
+
+    const b = await app(SHA_B);
+    h.gh.deploy(302, SHA_B, 'preview', b.url);
+    h.gh.compares.set(`${SHA_A}...${SHA_B}`, { status: 'ahead', files: [{ filename: 'src/notes/list.ts', status: 'modified' }] });
+    const second = (await submit(h, githubEvent(302, SHA_B))).json().run_id;
+    await h.worker.drain();
+    const r2 = (await getRun(h, second)).run;
+    expect(r2.selection_manifest.strategy).toBe('impact');
+    expect(r2.selection_manifest.cases.map((c: { scenario_id: string }) => c.scenario_id).sort()).toEqual(['checkout_existing_customer', 'notes_crud']);
+    expect(r2.selection_manifest.omitted).toContainEqual({ scenario_id: 'settings_preference_persists', reason: expect.stringMatching(/no impacted requirement/) });
+    expect(r2.gate.eligible).toBe(true);
+  });
+});

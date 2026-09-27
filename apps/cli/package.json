@@ -16,6 +16,7 @@
     "@qa/orchestrator": "*",
     "@qa/db": "*",
     "yaml": "^2.6.0",
-    "@qa/quality": "*"
+    "@qa/quality": "*",
+    "@qa/coverage": "*"
   }
 }

@@ -1,0 +1,68 @@
+# Requirement graph for the fixture-shop application.
+# Declared edges only; observed scenario→route edges are learned from run evidence
+# (qa coverage learn) and S2-suggested edges are advisory and never used to omit tests.
+schema_version: 1
+components:
+  - id: checkout
+    paths: ["src/checkout/**", "src/cart/**", "src/pricing/**"]
+    routes: [/cart, /checkout, /orders/:id, /orders]
+    capabilities: [checkout]
+  - id: catalog
+    paths: ["src/products/**"]
+    routes: [/products]
+    capabilities: [checkout]
+  - id: notes
+    paths: ["src/notes/**"]
+    routes: [/notes, /notes/:id, /notes/:id/edit]
+    capabilities: [notes]
+  - id: settings
+    paths: ["src/settings/**"]
+    routes: [/settings]
+    capabilities: [settings]
+  - id: auth
+    paths: ["src/session/**"]
+    routes: [/login]
+    capabilities: [auth]
+routes:
+  /cart: [checkout]
+  /checkout: [checkout]
+  /orders/:id: [checkout]
+  /notes: [notes]
+  /settings: [settings]
+  /login: [auth]
+capabilities:
+  checkout: [CHECKOUT-01, CHECKOUT-02, CHECKOUT-03, UX-01, A11Y-01, A11Y-02]
+  notes: [NOTES-01, NOTES-02, AUTHZ-01]
+  settings: [SETTINGS-01]
+  auth: [AUTH-01]
+broadening_triggers:
+  - { paths: ["src/auth/**", "src/middleware/**"], reason: authentication or session handling }
+  - { paths: ["src/router/**", "src/server.*"], reason: routing }
+  - { paths: ["src/styles/**", "src/design-tokens/**", "src/layout/**"], reason: shared design tokens or layout }
+  - { paths: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"], reason: dependency upgrade }
+  - { paths: ["migrations/**", "db/**", "src/state/**", "src/api/schema/**"], reason: "database migration, global state or API schema" }
+ignore: ["docs/**", "**/*.md", ".github/ISSUE_TEMPLATE/**"]
+transitions:
+  - [/login, /products]
+  - [/cart, /orders/:id]
+  - [/cart, /checkout]
+  - [/notes, /notes]
+  - [/settings, /settings]
+exploration_budget: { max_scenarios: 1 }
+input_classes:
+  delivery_address:
+    requirement: CHECKOUT-03
+    start_path: /cart
+    fixture: customer_cart_one_item_v1
+    role: customer
+    field: { label: Delivery address }
+    submit: { role: button, name: Place order }
+    intent: checkout.submit
+    mutation: test_owned_order_create
+    entity: order
+    owner_ref: fixture.customer_id
+    classes:
+      - { id: empty, value: "", expect: reject, error_testid: address-error, error_text: Delivery address is required. }
+      - { id: whitespace_only, value: "   ", expect: reject, error_testid: address-error, error_text: Delivery address is required. }
+      - { id: too_long, value_repeat: { char: x, count: 201 }, expect: reject, error_testid: address-error, error_text: Delivery address must be 200 characters or fewer. }
+      - { id: max_length, value_repeat: { char: x, count: 200 }, expect: accept, success_testid: order-confirmation }

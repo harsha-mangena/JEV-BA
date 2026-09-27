@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@qa/contracts": "*",
     "@qa/db": "*",
     "@qa/integrations": "*",
     "@qa/oracles": "*",
-    "@qa/worker": "*"
+    "@qa/worker": "*",
+    "@qa/coverage": "*"
   }
 }

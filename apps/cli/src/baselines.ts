@@ -29,7 +29,7 @@ async function pendingIn(runDir: string): Promise<{ report: RunReport; items: Pe
 
 export async function pending(a: ServiceArgs): Promise<number> {
   if (!a.run) throw new UsageError('--run is required');
-  const { items } = await pendingIn(resolve(a.run as string));
+  const { items } = await pendingIn(resolve(runArg(a)));
   for (const i of items) console.log(`${i.scenario}\t${i.profile}\t${i.key.checkpoint}\t${i.key.rendering_profile}\t${i.path}`);
   if (!items.length) console.log('no visual checkpoints awaiting approval');
   return 0;
@@ -39,7 +39,7 @@ export async function pending(a: ServiceArgs): Promise<number> {
 export async function approve(a: ServiceArgs): Promise<number> {
   if (!a.run || !a.approver || !a['commit-sha']) throw new UsageError('--run, --approver and --commit-sha are required');
   const store = new FsBaselineStore(resolve(a.baselines as string));
-  const { report, items } = await pendingIn(resolve(a.run as string));
+  const { report, items } = await pendingIn(resolve(runArg(a)));
   for (const i of items) {
     const r = await approveFromEvidence(store, i.key, i.path, i.sha256, { approved_by: a.approver as string, commit_sha: a['commit-sha'] as string, deployment_id: report.deployment_id, source: `${report.run_id}` });
     console.log(`approved ${i.scenario}/${i.key.checkpoint}/${i.profile} v${r.version}`);
@@ -52,4 +52,11 @@ export async function list(a: ServiceArgs): Promise<number> {
     console.log(`${r.key.scenario_id}/${r.key.checkpoint}/${r.key.execution_profile}\tv${r.version}\t${r.key.rendering_profile}\t${r.approved_by}\t${r.commit_sha.slice(0, 12)}`);
   }
   return 0;
+}
+
+function runArg(a: ServiceArgs): string {
+  const r = a.run;
+  const v = Array.isArray(r) ? r[0] : r;
+  if (!v) throw new UsageError('--run is required');
+  return v as string;
 }

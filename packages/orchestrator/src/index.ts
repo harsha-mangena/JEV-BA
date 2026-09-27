@@ -6,3 +6,4 @@ export * from './service.ts';
 export * from './worker.ts';
 export * from './admin.ts';
 export * from './factory.ts';
+export * from './impact.ts';

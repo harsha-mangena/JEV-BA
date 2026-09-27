@@ -17,6 +17,7 @@ import { FixtureClient } from '@qa/oracles';
 import { runSuite } from '@qa/worker';
 import * as svc from './service.ts';
 import * as baselineCmd from './baselines.ts';
+import * as coverageCmd from './coverage.ts';
 import { FindingLedger, FsBaselineStore } from '@qa/quality';
 
 const USAGE = `Usage: qa <command> [options]
@@ -30,6 +31,15 @@ Visual baselines:
   baseline pending         List visual checkpoints awaiting approval in a run (--run <run dir>).
   baseline approve         Approve every pending candidate in a run (--run --approver --commit-sha [--baselines dir]).
   baseline list            List approved baselines (--baselines dir).
+
+Change impact and proposals:
+  select                   Selection manifest for --base..--head in --repo (default .) using specs/coverage.yaml.
+  coverage learn           Learn observed scenario→route edges from run evidence (--run <dir>...).
+  coverage transitions     Declared vs observed route transitions (--run <dir>...).
+  coverage boundaries      What an exploration covered (--run <dir>).
+  proposals generate       Propose boundary/negative scenarios from input equivalence classes.
+  proposals validate <id>  Validate a proposal's oracles and references.
+  proposals approve <id>   Promote a valid proposal into specs/scenarios (--approver).
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
@@ -85,7 +95,10 @@ const { positionals, values } = parseArgs({
     defects: { type: 'string' },
     baselines: { type: 'string', default: 'baselines' },
     approver: { type: 'string' },
-    run: { type: 'string' },
+    run: { type: 'string', multiple: true },
+    base: { type: 'string' },
+    head: { type: 'string' },
+    repo: { type: 'string' },
     tenant: { type: 'string' },
     project: { type: 'string' },
     config: { type: 'string' },
@@ -211,6 +224,12 @@ async function main(): Promise<number> {
       if (sub === 'list') return baselineCmd.list(values);
       fail('usage: qa baseline pending|approve|list --run <run dir> [--baselines dir] [--approver name --commit-sha sha]');
     }
+    case 'select':
+      return coverageCmd.select(values);
+    case 'coverage':
+      return coverageCmd.coverage(positionals[1], values);
+    case 'proposals':
+      return coverageCmd.proposals(positionals[1], positionals[2], values);
     case 'migrate':
       return svc.migrate();
     case 'bootstrap':
