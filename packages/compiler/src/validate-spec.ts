@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { lintGeneratedSpec } from './playwright.ts';
 
@@ -31,7 +32,8 @@ export async function validateGeneratedSpec(source: string, o: { workDir: string
     HOME: o.workDir,
     QA_BASE_URL: o.baseUrl,
     QA_FIXTURE_TOKEN: o.fixtureToken,
-    ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}),
+    // HOME is isolated, so point Playwright at the real browser cache explicitly.
+    PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultBrowsersPath(),
   };
   const cli = join(process.cwd(), 'node_modules', '@playwright', 'test', 'cli.js');
   const code = await new Promise<number | null>((resolve) => {
@@ -49,4 +51,10 @@ export async function validateGeneratedSpec(source: string, o: { workDir: string
   } catch {
     return { status: 'error', detail: `no results produced (exit ${code})`, lint };
   }
+}
+
+function defaultBrowsersPath(): string {
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Caches', 'ms-playwright');
+  if (process.platform === 'win32') return join(process.env.LOCALAPPDATA ?? homedir(), 'ms-playwright');
+  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'ms-playwright');
 }
