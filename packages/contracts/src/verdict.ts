@@ -23,6 +23,8 @@ export const ReasonCode = z.enum([
   'version_drift',
   'cleanup_failed',
   'no_assertions_executed',
+  'autonomy_abstained',
+  'provider_unavailable',
 ]);
 export type ReasonCode = z.infer<typeof ReasonCode>;
 

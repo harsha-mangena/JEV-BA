@@ -20,6 +20,7 @@ milestones:
       - type: order_total_minor_units
         customer_ref: fixture.customer_id
         equals_ref: fixture.expected_total_minor_units
+inputs: [fixture.delivery_address]
 execution_profiles: [chromium_desktop]
 policy:
   environments: [local, preview, staging]

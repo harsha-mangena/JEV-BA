@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Slug } from './common.ts';
+import { RiskClass } from './decision.ts';
 
 /**
  * `$candidate` in an origin profile stands for the origin of the verified
@@ -24,6 +25,26 @@ export const ProjectPolicy = z
         })
         .strict(),
     ),
+    /**
+     * Trusted semantics for observed controls, used by autonomous exploration.
+     * The model never decides what a control does; an unbound control has
+     * unknown risk and is denied unless the scenario allows read-only exploration.
+     */
+    control_bindings: z
+      .array(
+        z
+          .object({
+            role: z.string().min(1),
+            name: z.string().min(1).optional(),
+            name_pattern: z.string().min(1).optional(),
+            intent: z.string().min(1).optional(),
+            risk_class: RiskClass,
+          })
+          .strict()
+          .refine((b) => (b.name === undefined) !== (b.name_pattern === undefined), 'exactly one of name or name_pattern is required')
+          .refine((b) => b.risk_class !== 'test_owned_mutation' || b.intent !== undefined, 'a mutation binding requires an intent'),
+      )
+      .default([]),
   })
   .strict();
 export type ProjectPolicy = z.output<typeof ProjectPolicy>;
@@ -58,4 +79,19 @@ export function authorizeIntent(
     allowed: false,
     reason: `intent ${intent} requires one of [${bound.map(([n]) => n).join(', ')}] authorized by the scenario for environment ${environment}`,
   };
+}
+
+export interface ControlBinding {
+  intent?: string;
+  risk_class: z.infer<typeof RiskClass>;
+}
+
+/** Resolve the trusted binding for an observed control; first match wins, no match means unknown risk. */
+export function bindControl(policy: ProjectPolicy, control: { role: string; name: string }): ControlBinding {
+  for (const b of policy.control_bindings) {
+    if (b.role !== control.role) continue;
+    const hit = b.name !== undefined ? b.name === control.name : new RegExp(`^(?:${b.name_pattern})$`).test(control.name);
+    if (hit) return { ...(b.intent ? { intent: b.intent } : {}), risk_class: b.risk_class };
+  }
+  return { risk_class: 'unknown' };
 }

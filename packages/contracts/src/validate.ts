@@ -73,6 +73,8 @@ export function validateScenarioSemantics(s: Scenario, catalog: FixtureCatalog, 
     }
   });
 
+  s.inputs.forEach((ref, i) => checkRef(`inputs.${i}`, ref, true));
+  if (s.mode === 'regression' && s.inputs.length > 0) issues.push({ path: 'inputs', message: 'inputs are only used by exploration scenarios' });
   if (new Set(s.requirement_ids).size !== s.requirement_ids.length) issues.push({ path: 'requirement_ids', message: 'duplicate requirement id' });
   const seen = new Set<string>();
   s.milestones.forEach((m, mi) => {

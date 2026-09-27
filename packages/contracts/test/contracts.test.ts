@@ -239,3 +239,15 @@ describe('deployment identity', () => {
     expect(DeploymentEnvelope.safeParse({ ...env, commit_sha: 'abc123' }).success).toBe(false);
   });
 });
+
+describe('control bindings', () => {
+  it('binds known controls and leaves the rest unknown', async () => {
+    const { bindControl } = await import('../src/index.ts');
+    expect(bindControl(policy, { role: 'button', name: 'Place order' })).toEqual({ intent: 'checkout.submit', risk_class: 'test_owned_mutation' });
+    expect(bindControl(policy, { role: 'button', name: 'Delete Groceries' })).toEqual({ risk_class: 'read_only' });
+    expect(bindControl(policy, { role: 'button', name: 'Delete Groceries now please' }).risk_class).toBe('read_only');
+    expect(bindControl(policy, { role: 'button', name: 'Place order now' })).toEqual({ risk_class: 'unknown' });
+    expect(bindControl(policy, { role: 'link', name: 'Cart' })).toEqual({ risk_class: 'read_only' });
+    expect(bindControl(policy, { role: 'button', name: 'Continue' })).toEqual({ risk_class: 'unknown' });
+  });
+});

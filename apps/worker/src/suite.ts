@@ -7,6 +7,7 @@ import { combineAttempts, evaluateReleaseGate, type CaseResult, type ExecutionPr
 import { toHtml, toJUnit } from '@qa/evidence';
 import type { FixtureClient } from '@qa/oracles';
 import { runCaseAttempt } from './case.ts';
+import type { ExplorationOptions } from './exploration.ts';
 
 export interface SuiteOptions {
   scenarios: Scenario[];
@@ -28,6 +29,8 @@ export interface SuiteOptions {
   browser?: Browser;
   runId?: string;
   onCase?: (c: CaseResult) => void;
+  /** Enables exploration scenarios (S1-guided). Their results are advisory unless explicitly required. */
+  exploration?: ExplorationOptions;
 }
 
 export interface SuiteResult {
@@ -103,7 +106,7 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
           }
           const attempts: CaseResult[] = [];
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}) });
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
           }
@@ -136,9 +139,13 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
 
   const order = new Map(expected.map((e, i) => [`${e.scenario_id}@${e.execution_profile}`, i]));
   cases.sort((a, b) => order.get(`${a.scenario_id}@${a.execution_profile}`)! - order.get(`${b.scenario_id}@${b.execution_profile}`)!);
+  // Exploration results are advisory: they are reported but neither required nor able to satisfy the gate.
+  const exploratory = new Set(o.scenarios.filter((sc) => sc.mode === 'exploration').map((sc) => sc.id));
   const gate = evaluateReleaseGate(
-    expected,
-    cases.map((c) => ({ scenario_id: c.scenario_id, execution_profile: c.execution_profile, verdict: c.verdict, critical: c.critical, required: true })),
+    expected.filter((e) => !exploratory.has(e.scenario_id)),
+    cases
+      .filter((c) => !exploratory.has(c.scenario_id))
+      .map((c) => ({ scenario_id: c.scenario_id, execution_profile: c.execution_profile, verdict: c.verdict, critical: c.critical, required: true })),
   );
   const cleanupFailures = cases.filter((c) => c.cleanup.status === 'failed');
   if (cleanupFailures.length) gate.reasons.push(...cleanupFailures.map((c) => `${c.scenario_id}@${c.execution_profile}: cleanup failed (${c.cleanup.detail ?? ''})`));

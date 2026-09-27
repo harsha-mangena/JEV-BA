@@ -23,3 +23,14 @@ mutations:
     action_intents: [settings.save]
     environments: [local, preview, staging]
     test_owned_only: true
+# Trusted control semantics for autonomous exploration (first match wins).
+# Unbound controls have unknown risk and are denied by default.
+control_bindings:
+  - { role: button, name: Place order, intent: checkout.submit, risk_class: test_owned_mutation }
+  - { role: button, name: Save cart for later, risk_class: reversible_input }
+  - { role: button, name: Add note, intent: notes.create, risk_class: test_owned_mutation }
+  - { role: button, name: Confirm delete, intent: notes.delete, risk_class: test_owned_mutation }
+  - { role: button, name: Save settings, intent: settings.save, risk_class: test_owned_mutation }
+  - { role: button, name_pattern: "Delete .+", risk_class: read_only }
+  - { role: button, name: Cancel, risk_class: read_only }
+  - { role: link, name_pattern: "Products|Cart|Orders|Notes|Settings|Browse products", risk_class: read_only }

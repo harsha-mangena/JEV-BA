@@ -80,6 +80,8 @@ export const ScenarioPolicy = z
     mutations: z.array(Slug).default([]),
     external_effects: z.enum(['none', 'sandbox_only']),
     allowed_origin_profile: Slug,
+    /** Autonomous exploration only: whether controls with no trusted binding may be clicked as read-only. */
+    unknown_actions: z.enum(['deny', 'read_only_exploration']).default('deny'),
   })
   .strict();
 export type ScenarioPolicy = z.output<typeof ScenarioPolicy>;
@@ -109,6 +111,8 @@ export const Scenario = z
     role: z.string().min(1),
     goal: z.string().min(1),
     milestones: z.array(Milestone).min(1, 'a scenario must have at least one milestone'),
+    /** Exploration only: fixture values the explorer may type. Secrets are referenced, never inlined. */
+    inputs: z.array(ValueRef).default([]),
     execution_profiles: z.array(ExecutionProfileId).min(1),
     policy: ScenarioPolicy,
     budgets: Budgets.default({}),
