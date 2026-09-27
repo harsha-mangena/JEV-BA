@@ -10,5 +10,5 @@ Status: accepted
 - `@playwright/test` is pinned to an exact version (`1.56.1`) so browser
   binaries, fonts and rendering are reproducible. `QA_CHROMIUM_EXECUTABLE`
   overrides the binary where a matching Chromium is preinstalled.
-- No database or queue yet: Phases 0–3 run in-process. PostgreSQL with a
-  transactional outbox arrives with deployment orchestration (Phase 4).
+- PostgreSQL with leased jobs and a transactional outbox (no separate queue),
+  as the plan recommends; migrations in `packages/db/migrations`.

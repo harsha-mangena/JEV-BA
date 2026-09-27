@@ -1,27 +1,26 @@
 # Capability matrix
 
-What the platform can currently execute and verify. Anything marked
-unsupported is reported as `BLOCKED unsupported_capability` or excluded from
-coverage — never silently passed.
+What the platform executes and verifies. Unsupported capabilities are reported
+as `BLOCKED unsupported_capability` or excluded with a reason — never silently
+passed.
 
-| Capability | Regression runner | Exploration (S1) | Notes |
+| Capability | Regression | Exploration (S1) | Notes |
 | --- | --- | --- | --- |
-| Chromium desktop 1280×800 | ✅ | ✅ | Pinned Playwright 1.56.1 |
-| Chromium mobile viewport 390×844 | ✅ | ✅ | Viewport emulation only; not native-device evidence |
-| Firefox / WebKit | ❌ | ❌ | Phase 9 |
-| Click (actionability-checked, no `force`) | ✅ | ✅ | Trial pass before dispatch separates "not dispatched" from "effect unknown" |
-| Type / fill | ✅ | ✅ | Values from fixture refs; secrets resolved only at dispatch |
-| Select option | ✅ | ❌ | Not enabled for exploration until capability tests exist |
-| Navigate / reload | ✅ | — | |
-| Scroll, keyboard, upload, drag | ❌ | ❌ | |
-| iframes, shadow DOM | ❌ | ❌ (counted in coverage) | Reported via `coverage.unsupported_frames` / `shadow_roots_skipped` |
-| Canvas interaction | ❌ | ❌ | Out of scope for the first release |
-| UI assertions (visible/hidden/text/url) | ✅ | ✅ | Strict: ambiguous locators fail |
-| Backend assertions (order/note count delta, integer totals) | ✅ | ✅ | Through the fixture service, independent of the UI |
-| Persistence after reload | ✅ | ✅ | |
-| Console-error assertion | ✅ | ✅ | |
-| Origin allow-list | ✅ | ✅ | Off-origin requests aborted and logged; main-frame navigation off-origin → BLOCKED |
-| Revision check (expected SHA) | ✅ | ✅ | Before and after the run; drift → SUPERSEDED |
-| Visual baselines, axe accessibility, keyboard journeys | ❌ | ❌ | Phase 5 |
-| Deployment webhooks, status publishing | ❌ | ❌ | Phase 4 (envelope/dedup contracts exist) |
-| Live S1 / S2 providers | — | ❌ | Interfaces and offline fakes only |
+| Chromium desktop / mobile viewport | ✅ | ✅ | Pinned Playwright 1.56.1; viewport emulation is not native-device evidence |
+| Firefox / WebKit desktop | ✅ when installed | ✅ when installed | Missing browser → BLOCKED |
+| Click, type, select, navigate, reload | ✅ | click/type | Actionability-checked; never `force`; trial pass separates not-dispatched from effect-unknown |
+| Keyboard (`press`) | ✅ | ❌ | Tab/Shift+Tab/Enter/Space/Escape/arrows |
+| Scroll, upload, drag, canvas | ❌ | ❌ | Out of scope |
+| iframes, shadow DOM | ❌ | ❌ | Counted in observation coverage |
+| UI assertions (visible/hidden/text/url/focus) | ✅ | ✅ | Strict: ambiguous locators fail |
+| Backend oracles (entity deltas, integer totals) | ✅ | ✅ | Via the fixture service; unavailable in read-only profile |
+| Visual baselines | ✅ | — | Per scenario/checkpoint/profile/rendering profile; explicit approval |
+| Layout geometry | ✅ | — | Overflow, overlap, obscured, clipped |
+| Automated accessibility (axe) | ✅ | — | Not a full accessibility audit |
+| Origin allow-list, revision checks | ✅ | ✅ | Before and after runs |
+| Deployment triggers | GitHub webhook/workflow, Vercel webhook/dispatch, pipeline, manual | | |
+| Status publishing | GitHub commit status, Vercel deployment check | | |
+| Change-aware selection | ✅ | ✅ | Broadens on any uncertainty |
+| Read-only production profile | ✅ | disabled | Fixture-less, non-mutating, read-only controls only |
+| Live S1 providers | — | TypeSafe (unverified format), neutral HTTP | Probe before enabling |
+| Calibrated autonomy | — | after `qa calibrate` | Exact decision configuration, supported cohorts only |

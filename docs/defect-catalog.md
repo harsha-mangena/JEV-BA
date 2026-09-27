@@ -18,5 +18,12 @@ catalog and the detection matrix stay in sync.
 | `cart_console_error` | CHECKOUT-01 no script errors | `checkout_existing_customer` | FAIL `assertion_failed` (no_console_errors) |
 | `checkout_button_disabled` | CHECKOUT-01 control actionable | `checkout_existing_customer` | FAIL `step_target_unavailable` |
 
+| `mobile_horizontal_overflow` | UX-01 layout | `cart_quality` (mobile) | FAIL `layout_sound` |
+| `promo_overlay` | UX-01 / CHECKOUT-01 | `cart_quality`, `checkout_existing_customer` | FAIL `layout_sound`; FAIL `step_target_unavailable` |
+| `address_label_missing` | A11Y-01 | `cart_quality` | FAIL `a11y_scan` (label) |
+| `focus_outline_removed` | A11Y-02 | `keyboard_checkout` | FAIL `focus_visible` |
+| `header_restyled` | UX-01 approved appearance | `cart_quality` | FAIL `visual_match` (after a baseline exists) |
+| `checkout_button_renamed` | intended copy change | `checkout_existing_customer` | FAIL `step_target_unavailable`; locator repair proposed |
+
 Enable defects with `FIXTURE_DEFECTS=a,b` (standalone app), `qa demo --defects a,b`,
 or `PUT /__qa/defects` on a running fixture app.
