@@ -1,0 +1,11 @@
+{
+  "name": "@qa/s2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@qa/contracts": "*",
+    "zod": "^3.24.0"
+  }
+}

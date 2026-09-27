@@ -1,0 +1,24 @@
+# Fixtures the fixture service can provision. Scenario references
+# (fixture.<field>, secret.<field>) are validated against this catalog.
+schema_version: 1
+fixtures:
+  customer_cart_one_item_v1:
+    description: Signed-in customer whose cart holds 2 x Widget; expected total from business rules.
+    role: customer
+    fields: [customer_id, email, delivery_address, expected_total_minor_units, expected_total_display]
+    secrets: [password]
+  customer_empty_v1:
+    description: Signed-in customer with no cart, orders or notes.
+    role: customer
+    fields: [customer_id, email]
+    secrets: [password]
+  customer_signed_out_v1:
+    description: Customer account with no session; used for the sign-in journey.
+    role: customer
+    fields: [customer_id, email]
+    secrets: [password]
+  viewer_v1:
+    description: Signed-in read-only viewer.
+    role: viewer
+    fields: [customer_id, email]
+    secrets: [password]

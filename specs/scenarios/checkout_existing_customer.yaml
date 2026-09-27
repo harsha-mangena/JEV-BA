@@ -1,0 +1,52 @@
+schema_version: 1
+id: checkout_existing_customer
+requirement_ids: [CHECKOUT-01, CHECKOUT-02]
+mode: regression
+critical: true
+start_path: /cart
+fixture: customer_cart_one_item_v1
+role: customer
+goal: Place the fixture order using the supplied delivery address.
+milestones:
+  - id: cart_reviewed
+    assertions:
+      - type: ui_text
+        target: cart-total
+        equals_ref: fixture.expected_total_display
+      - type: no_console_errors
+  - id: order_persisted
+    action_intent: checkout.submit
+    steps:
+      - op: type
+        target: { label: Delivery address }
+        value_ref: fixture.delivery_address
+      - op: click
+        target: { role: button, name: Place order }
+        intent: checkout.submit
+    assertions:
+      - type: ui_visible
+        target: order-confirmation
+      - type: order_count_delta
+        customer_ref: fixture.customer_id
+        equals: 1
+      - type: order_total_minor_units
+        customer_ref: fixture.customer_id
+        equals_ref: fixture.expected_total_minor_units
+      - type: ui_text
+        target: order-total
+        equals_ref: fixture.expected_total_display
+      - type: persists_after_reload
+        target: order-confirmation
+      - type: no_console_errors
+execution_profiles: [chromium_desktop, chromium_mobile_viewport]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_order_create]
+  external_effects: sandbox_only
+  allowed_origin_profile: owned_checkout
+budgets:
+  max_actions: 40
+  max_reobservations_per_decision: 2
+  max_s2_calls: 3
+  max_wall_clock_seconds: 120
+cleanup: delete_test_owned_entities

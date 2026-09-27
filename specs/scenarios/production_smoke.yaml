@@ -1,0 +1,25 @@
+# Read-only production check: nothing is provisioned, nothing is mutated.
+schema_version: 1
+id: production_smoke
+requirement_ids: [AUTH-01]
+mode: regression
+critical: true
+start_path: /login
+role: anonymous
+goal: The sign-in page renders without script errors or serious accessibility violations.
+milestones:
+  - id: sign_in_page_available
+    assertions:
+      - type: url_path
+        equals: /login
+      - type: ui_visible
+        target: { role: button, name: Sign in }
+      - type: no_console_errors
+      - type: a11y_scan
+        fail_on: serious
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging, production]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: none

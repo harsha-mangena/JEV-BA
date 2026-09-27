@@ -1,0 +1,36 @@
+# Project policy for the controlled fixture application.
+# Mutation bindings map trusted action intents to named, test-owned effects.
+# A scenario may perform a bound intent only if it lists the mutation AND the
+# environment is permitted here. Model scores never grant permission.
+schema_version: 1
+project_id: fixture-shop
+environments: [local, preview, staging, production]
+origin_profiles:
+  owned_app:
+    origins: [$candidate]
+  owned_checkout:
+    origins: [$candidate]
+mutations:
+  test_owned_order_create:
+    action_intents: [checkout.submit]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_note_write:
+    action_intents: [notes.create, notes.update, notes.delete]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_preference_write:
+    action_intents: [settings.save]
+    environments: [local, preview, staging]
+    test_owned_only: true
+# Trusted control semantics for autonomous exploration (first match wins).
+# Unbound controls have unknown risk and are denied by default.
+control_bindings:
+  - { role: button, name: Place order, intent: checkout.submit, risk_class: test_owned_mutation }
+  - { role: button, name: Save cart for later, risk_class: reversible_input }
+  - { role: button, name: Add note, intent: notes.create, risk_class: test_owned_mutation }
+  - { role: button, name: Confirm delete, intent: notes.delete, risk_class: test_owned_mutation }
+  - { role: button, name: Save settings, intent: settings.save, risk_class: test_owned_mutation }
+  - { role: button, name_pattern: "Delete .+", risk_class: read_only }
+  - { role: button, name: Cancel, risk_class: read_only }
+  - { role: link, name_pattern: "Products|Cart|Orders|Notes|Settings|Browse products", risk_class: read_only }

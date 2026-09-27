@@ -1,0 +1,13 @@
+{
+  "name": "@qa/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0",
+    "zod": "^3.25.76"
+  }
+}

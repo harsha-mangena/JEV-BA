@@ -1,0 +1,26 @@
+schema_version: 1
+id: viewer_cannot_create_notes
+requirement_ids: [AUTHZ-01]
+mode: regression
+critical: true
+start_path: /notes
+fixture: viewer_v1
+role: viewer
+goal: A read-only viewer is not offered note creation.
+milestones:
+  - id: read_only_enforced
+    assertions:
+      - type: ui_visible
+        target: read-only-notice
+      - type: ui_hidden
+        target: { role: button, name: Add note }
+      - type: entity_count_delta
+        entity: note
+        owner_ref: fixture.customer_id
+        equals: 0
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

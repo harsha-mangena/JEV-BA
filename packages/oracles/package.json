@@ -1,0 +1,15 @@
+{
+  "name": "@qa/oracles",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@qa/contracts": "*",
+    "@playwright/test": "1.56.1",
+    "@qa/browser": "*",
+    "@qa/quality": "*"
+  }
+}

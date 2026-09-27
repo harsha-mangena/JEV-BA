@@ -1,0 +1,20 @@
+{
+  "name": "@qa/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@qa/contracts": "*",
+    "@qa/db": "*",
+    "@qa/integrations": "*",
+    "@qa/oracles": "*",
+    "@qa/worker": "*",
+    "@qa/coverage": "*",
+    "@qa/evidence": "*",
+    "@qa/quality": "*",
+    "@qa/s1": "*"
+  }
+}

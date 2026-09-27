@@ -1,0 +1,310 @@
+import { createHash, randomBytes } from 'node:crypto';
+import type pg from 'pg';
+import { executionDedupKey, ProjectConfig, parseWith, requiredCheckContext, type SelectionManifest } from '@qa/contracts';
+import type { Db } from '@qa/db';
+import { DeploymentVerificationError, type DeploymentClaim, type DeploymentVerifier, type StatusPublisher } from '@qa/integrations';
+import type { ArtifactStore } from '@qa/evidence';
+import type { BaselineStore } from '@qa/quality';
+import type { SystemOneProvider } from '@qa/s1';
+import { loadSuite, selectFullSuite, type LoadedSuite } from './suite.ts';
+import { ApiError, canSeeProject, requireRole, type Principal, type ProjectRow, type RunRow } from './types.ts';
+import { checkCandidateUrl, type Resolver } from './url-policy.ts';
+
+export interface SelectionContext {
+  project: ProjectRow;
+  suite: LoadedSuite;
+  environment: string;
+  commit_sha: string;
+  /** Last accepted deployment SHA in the same environment lineage, if any. */
+  baseline_sha: string | null;
+}
+
+export interface OrchestratorDeps {
+  db: Db;
+  verifierFor(project: ProjectRow, provider: string): DeploymentVerifier;
+  publisherFor(project: ProjectRow): StatusPublisher;
+  /** Directory that project suite paths are resolved against. */
+  suiteBaseDir: string;
+  resolveHost?: Resolver;
+  env?: NodeJS.ProcessEnv;
+  /** Change-aware selection; defaults to the full suite. */
+  select?(ctx: SelectionContext): Promise<SelectionManifest>;
+  /** Run evidence storage shared by workers, reviews and the dashboard. */
+  artifacts?: ArtifactStore;
+  /** Visual baseline store per project. */
+  baselinesFor?(project: ProjectRow): BaselineStore;
+  /** Wraps the exploration S1 provider per tenant (quotas, circuit breaking). */
+  s1For?(tenantId: string, inner: SystemOneProvider): SystemOneProvider;
+}
+
+export interface SubmitInput extends DeploymentClaim {
+  repository_id: string | null;
+  ci_run_id?: string;
+}
+
+export interface SubmitResult {
+  run_id: string;
+  state: string;
+  deduplicated: boolean;
+  /** Submission acceptance is not a QA result. */
+  note: string;
+}
+
+export const newId = (prefix: string) => `${prefix}_${randomBytes(9).toString('base64url')}`;
+export const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex');
+const TERMINAL = ['COMPLETED', 'ERROR', 'CANCELLED', 'SUPERSEDED'];
+
+export class Orchestrator {
+  constructor(readonly deps: OrchestratorDeps) {}
+
+  get db(): Db {
+    return this.deps.db;
+  }
+
+  async audit(c: { query(sql: string, params: unknown[]): Promise<unknown> }, p: Principal | { tenant_id: string | null; actor: string }, action: string, subject: string | null, detail: Record<string, unknown> = {}): Promise<void> {
+    await c.query('insert into audit_log(tenant_id, actor, action, subject, detail) values ($1,$2,$3,$4,$5)', [p.tenant_id, p.actor, action, subject, JSON.stringify(detail)]);
+  }
+
+  // ---------- principals and projects ----------
+
+  async authenticate(bearer: string | undefined): Promise<Principal> {
+    if (!bearer) throw new ApiError(401, 'unauthenticated', 'missing bearer token');
+    const row = await this.db.one<{ tenant_id: string; project_id: string | null; role: Principal['role']; label: string }>(
+      'select tenant_id, project_id, role, label from api_tokens where token_hash=$1 and revoked_at is null',
+      [tokenHash(bearer)],
+    );
+    if (!row) throw new ApiError(401, 'unauthenticated', 'invalid or revoked token');
+    return { tenant_id: row.tenant_id, project_id: row.project_id, role: row.role, actor: `token:${row.label}` };
+  }
+
+  async projectById(id: string): Promise<ProjectRow | undefined> {
+    const r = await this.db.one<ProjectRow>('select id, tenant_id, repository_id, repository_full_name, config, webhook_secret_ref, github_installation_id::text from projects where id=$1', [id]);
+    return r ? { ...r, config: parseWith(ProjectConfig, r.config, `project ${id}`) } : undefined;
+  }
+
+  async projectByRepository(repositoryId: string): Promise<ProjectRow | undefined> {
+    const r = await this.db.one<{ id: string }>('select id from projects where repository_id=$1', [repositoryId]);
+    return r ? this.projectById(r.id) : undefined;
+  }
+
+  async visibleProject(p: Principal, id: string): Promise<ProjectRow> {
+    const project = await this.projectById(id);
+    if (!project || !canSeeProject(p, project)) throw new ApiError(404, 'not_found', 'project not found');
+    return project;
+  }
+
+  async visibleRun(p: Principal, id: string): Promise<RunRow> {
+    const run = await this.db.one<RunRow>('select * from runs where id=$1', [id]);
+    if (!run || !canSeeProject(p, { tenant_id: run.tenant_id, id: run.project_id })) throw new ApiError(404, 'not_found', 'run not found');
+    return run;
+  }
+
+  // ---------- ingestion ----------
+
+  /**
+   * Accept a deployment-ready event. The claim is verified against trusted
+   * provider metadata, the URL against project policy, and the logical run is
+   * deduplicated by (tenant, project, provider, deployment, suite revision,
+   * profile set). Redelivery never creates a second run.
+   */
+  async submitDeployment(p: Principal, project: ProjectRow, input: SubmitInput, delivery: { provider: string; delivery_id: string; payload_digest: string }): Promise<SubmitResult> {
+    // Concurrent duplicates race on unique constraints; the loser re-reads and returns the winner's run.
+    for (let i = 0; ; i++) {
+      try {
+        return await this.submitOnce(p, project, input, delivery);
+      } catch (e) {
+        if ((e as { code?: string }).code !== '23505' || i >= 3) throw e;
+      }
+    }
+  }
+
+  private async submitOnce(p: Principal, project: ProjectRow, input: SubmitInput, delivery: { provider: string; delivery_id: string; payload_digest: string }): Promise<SubmitResult> {
+    requireRole(p, 'submitter');
+    if (!canSeeProject(p, project)) throw new ApiError(404, 'not_found', 'project not found');
+    if (input.repository_id !== null && project.repository_id !== null && input.repository_id !== project.repository_id) {
+      throw new ApiError(403, 'repository_mismatch', 'event repository is not bound to this project');
+    }
+
+    const prior = await this.db.one<{ run_id: string | null; outcome: string; detail: string | null }>('select run_id, outcome, detail from event_deliveries where provider=$1 and delivery_id=$2', [delivery.provider, delivery.delivery_id]);
+    if (prior) {
+      if (prior.run_id) {
+        const run = await this.db.one<RunRow>('select * from runs where id=$1', [prior.run_id]);
+        return { run_id: prior.run_id, state: run?.state ?? 'UNKNOWN', deduplicated: true, note: 'redelivery of an accepted event' };
+      }
+      throw new ApiError(409, 'delivery_already_rejected', `delivery previously ${prior.outcome}: ${prior.detail ?? ''}`);
+    }
+    const reject = async (status: number, code: string, message: string, detail?: unknown): Promise<never> => {
+      await this.db.query('insert into event_deliveries(provider, delivery_id, tenant_id, project_id, payload_digest, outcome, detail) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [delivery.provider, delivery.delivery_id, project.tenant_id, project.id, delivery.payload_digest, 'rejected', `${code}: ${message}`]);
+      await this.audit(this.db, p, 'deployment.rejected', project.id, { code, message });
+      throw new ApiError(status, code, message, detail);
+    };
+
+    const envCfg = project.config.environments[input.environment];
+    if (!envCfg) return reject(422, 'environment_not_configured', `environment ${input.environment} is not configured`);
+    if (!/^[0-9a-f]{40}$/.test(input.commit_sha)) return reject(422, 'invalid_sha', 'commit_sha must be a full 40-character SHA');
+
+    let verified;
+    try {
+      verified = await this.deps.verifierFor(project, input.provider).verify({ ...input, repository: project.repository_full_name });
+    } catch (e) {
+      if (e instanceof DeploymentVerificationError) return reject(422, 'deployment_unverified', e.message, e.checks);
+      return reject(502, 'provider_lookup_failed', (e as Error).message);
+    }
+    const urlProblems = await checkCandidateUrl(verified.immutable_url, envCfg, this.deps.resolveHost);
+    if (urlProblems.length) return reject(422, 'url_rejected', urlProblems.join('; '), urlProblems);
+
+    let suite: LoadedSuite;
+    try {
+      suite = await loadSuite(project.config, this.deps.suiteBaseDir);
+    } catch (e) {
+      return reject(500, 'suite_invalid', (e as Error).message);
+    }
+    const baseline = await this.db.one<{ commit_sha: string }>(
+      `select r.commit_sha from runs r where r.project_id=$1 and r.environment=$2 and r.state='COMPLETED' and (r.gate->>'eligible')::boolean order by r.completed_at desc limit 1`,
+      [project.id, verified.environment],
+    );
+    const manifest = await (this.deps.select ?? (async (c) => selectFullSuite(c.suite, c.project.config, c.environment, c.commit_sha)))({
+      project,
+      suite,
+      environment: verified.environment,
+      commit_sha: verified.commit_sha,
+      baseline_sha: baseline?.commit_sha ?? null,
+    });
+    if (envCfg.read_only) restrictToReadOnly(manifest, suite);
+    const profileSet = [...new Set(manifest.cases.map((c) => c.execution_profile))].sort().join('+') || 'none';
+    const dedupKey = executionDedupKey({ tenant_id: project.tenant_id, project_id: project.id, provider: input.provider, deployment_id: verified.deployment_id, suite_revision: suite.revision, execution_profile: profileSet });
+
+    return this.db.tx(async (c) => {
+      const dep = await c.query<{ id: string; commit_sha: string; immutable_url: string }>(
+        `insert into deployments(id, tenant_id, project_id, provider, provider_deployment_id, environment, immutable_url, commit_sha, manifest)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         on conflict (project_id, provider, provider_deployment_id) do update set provider_deployment_id = excluded.provider_deployment_id
+         returning id, commit_sha, immutable_url`,
+        [newId('dep'), project.tenant_id, project.id, input.provider, verified.deployment_id, verified.environment, verified.immutable_url, verified.commit_sha, JSON.stringify({ ...verified, verified_at: new Date().toISOString() })],
+      );
+      const deployment = dep.rows[0]!;
+      if (deployment.commit_sha !== verified.commit_sha || deployment.immutable_url !== verified.immutable_url) {
+        throw new ApiError(409, 'deployment_mutated', 'a deployment id cannot change its SHA or URL');
+      }
+      const runId = newId('run');
+      const inserted = await c.query<RunRow>(
+        `insert into runs(id, tenant_id, project_id, deployment_id, environment, commit_sha, suite_revision, execution_profile, dedup_key, state, selection_manifest)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WAITING_READY',$10) on conflict (dedup_key) do nothing returning *`,
+        [runId, project.tenant_id, project.id, deployment.id, verified.environment, verified.commit_sha, suite.revision, profileSet, dedupKey, JSON.stringify(manifest)],
+      );
+      const deduplicated = inserted.rowCount === 0;
+      const run = deduplicated ? (await c.query<RunRow>('select * from runs where dedup_key=$1', [dedupKey])).rows[0]! : inserted.rows[0]!;
+      await c.query('insert into event_deliveries(provider, delivery_id, tenant_id, project_id, payload_digest, outcome, run_id) values ($1,$2,$3,$4,$5,$6,$7)', [delivery.provider, delivery.delivery_id, project.tenant_id, project.id, delivery.payload_digest, deduplicated ? 'deduplicated' : 'accepted', run.id]);
+      if (!deduplicated) {
+        // A newer deployment in the same environment supersedes older unfinished runs.
+        const superseded = await c.query<{ id: string }>(
+          `update runs set state='SUPERSEDED', superseded_by=$1, reason='superseded', message=$2, updated_at=now(), completed_at=now()
+           where project_id=$3 and environment=$4 and deployment_id<>$5 and state not in ('COMPLETED','ERROR','CANCELLED','SUPERSEDED') returning id`,
+          [run.id, `superseded by deployment ${verified.deployment_id}`, project.id, verified.environment, deployment.id],
+        );
+        for (const s of superseded.rows) {
+          await c.query(`update jobs set state='cancelled', updated_at=now() where run_id=$1 and state='queued'`, [s.id]);
+          await this.enqueueStatus(c, project.tenant_id, s.id);
+        }
+        await c.query('insert into jobs(tenant_id, run_id, kind, payload) values ($1,$2,$3,$4)', [project.tenant_id, run.id, 'readiness', JSON.stringify({ attempt: 1 })]);
+        await this.enqueueStatus(c, project.tenant_id, run.id);
+        await this.audit(c, p, 'run.created', run.id, { deployment: verified.deployment_id, sha: verified.commit_sha, suite: suite.revision, superseded: superseded.rows.map((r) => r.id) });
+      }
+      return { run_id: run.id, state: run.state, deduplicated, note: 'accepted for testing; this is not a QA result — wait for the required check' };
+    });
+  }
+
+  async enqueueStatus(c: pg.ClientBase, tenantId: string, runId: string): Promise<void> {
+    await c.query('insert into outbox_events(tenant_id, kind, payload) values ($1,$2,$3)', [tenantId, 'publish_status', JSON.stringify({ run_id: runId })]);
+  }
+
+  // ---------- run control ----------
+
+  async getRun(p: Principal, id: string) {
+    const run = await this.visibleRun(p, id);
+    const cases = (await this.db.query('select attempt, shard, scenario_id, execution_profile, verdict, result, run_dir from case_results where run_id=$1 order by attempt, scenario_id, execution_profile', [id])).rows;
+    const deployment = await this.db.one('select provider, provider_deployment_id, environment, immutable_url, commit_sha from deployments where id=$1', [run.deployment_id]);
+    return { run, deployment, cases };
+  }
+
+  async cancelRun(p: Principal, id: string): Promise<RunRow> {
+    requireRole(p, 'submitter');
+    const run = await this.visibleRun(p, id);
+    if (TERMINAL.includes(run.state)) throw new ApiError(409, 'terminal', `run is already ${run.state}`);
+    return this.db.tx(async (c) => {
+      await c.query('update runs set cancel_requested=true, updated_at=now() where id=$1', [id]);
+      // Anything not actively executing is cancelled immediately; an executing shard aborts at its next checkpoint and still cleans up.
+      const leased = await c.query(`select 1 from jobs where run_id=$1 and state='leased' and kind='execute_shard'`, [id]);
+      if (leased.rowCount === 0) {
+        await c.query(`update runs set state='CANCELLED', reason='cancelled', message='cancelled on request', completed_at=now(), updated_at=now() where id=$1 and state not in ('COMPLETED','ERROR','CANCELLED','SUPERSEDED')`, [id]);
+        await c.query(`update jobs set state='cancelled', updated_at=now() where run_id=$1 and state in ('queued','leased')`, [id]);
+        await this.enqueueStatus(c, run.tenant_id, id);
+      }
+      await this.audit(c, p, 'run.cancel', id);
+      return (await c.query<RunRow>('select * from runs where id=$1', [id])).rows[0]!;
+    });
+  }
+
+  /** A deliberate rerun: new attempt of the same logical run; earlier attempts' results are preserved. */
+  async retryRun(p: Principal, id: string, reason: string): Promise<RunRow> {
+    requireRole(p, 'submitter');
+    if (!reason?.trim()) throw new ApiError(400, 'reason_required', 'a retry requires an explicit reason');
+    const run = await this.visibleRun(p, id);
+    if (!['COMPLETED', 'ERROR', 'CANCELLED'].includes(run.state)) throw new ApiError(409, 'not_retryable', `cannot retry a run in state ${run.state}`);
+    const current = await this.db.one<{ id: string }>('select id from deployments where project_id=$1 and environment=$2 order by created_at desc limit 1', [run.project_id, run.environment]);
+    if (current?.id !== run.deployment_id) throw new ApiError(409, 'not_current', 'a newer deployment exists; retrying an old deployment cannot affect its gate');
+    return this.db.tx(async (c) => {
+      const r = await c.query<RunRow>(
+        `update runs set attempt=attempt+1, state='WAITING_READY', gate=null, reason=null, message=null, cancel_requested=false, completed_at=null, updated_at=now() where id=$1 and state=$2 returning *`,
+        [id, run.state],
+      );
+      if (r.rowCount === 0) throw new ApiError(409, 'conflict', 'run changed concurrently');
+      await c.query('insert into jobs(tenant_id, run_id, kind, payload) values ($1,$2,$3,$4)', [run.tenant_id, id, 'readiness', JSON.stringify({ attempt: r.rows[0]!.attempt })]);
+      await this.enqueueStatus(c, run.tenant_id, id);
+      await this.audit(c, p, 'run.retry', id, { reason, attempt: r.rows[0]!.attempt });
+      return r.rows[0]!;
+    });
+  }
+
+  /**
+   * What a promotion controller consumes. Eligible only when the requested
+   * deployment is the environment's current candidate, the SHA matches, the
+   * suite has not changed since, and that exact run completed with an
+   * eligible gate. A late result for an older deployment can never apply.
+   */
+  async gateStatus(p: Principal, q: { project_id: string; environment: string; deployment_id: string; commit_sha: string }) {
+    const project = await this.visibleProject(p, q.project_id);
+    const reasons: string[] = [];
+    const current = await this.db.one<{ id: string; provider_deployment_id: string; commit_sha: string }>(
+      'select id, provider_deployment_id, commit_sha from deployments where project_id=$1 and environment=$2 order by created_at desc limit 1',
+      [project.id, q.environment],
+    );
+    if (!current) return { eligible: false, reasons: ['no deployment registered for this environment'] };
+    if (current.provider_deployment_id !== q.deployment_id) reasons.push(`deployment ${q.deployment_id} is not the current candidate (${current.provider_deployment_id})`);
+    if (current.commit_sha !== q.commit_sha) reasons.push('commit SHA does not match the current candidate');
+    const run = await this.db.one<RunRow>('select * from runs where deployment_id=$1 order by created_at desc limit 1', [current.id]);
+    if (!run) reasons.push('no QA run for the current candidate');
+    else {
+      const suite = await loadSuite(project.config, this.deps.suiteBaseDir).catch(() => null);
+      if (!suite || suite.revision !== run.suite_revision) reasons.push('suite or policy changed since the run; results are stale');
+      if (run.state !== 'COMPLETED') reasons.push(`run ${run.id} is ${run.state}`);
+      else if (!run.gate?.eligible) reasons.push(...(run.gate?.reasons ?? ['gate held']));
+    }
+    return { eligible: reasons.length === 0, run_id: run?.id ?? null, reasons };
+  }
+
+  statusContext(project: ProjectRow, environment: string): string {
+    return requiredCheckContext(project.config, project.id, environment);
+  }
+}
+
+/** Production (read-only) environments run only fixture-less, non-mutating regression scenarios. */
+export function restrictToReadOnly(manifest: SelectionManifest, suite: LoadedSuite): void {
+  const ok = new Set(suite.scenarios.filter((s) => !s.fixture && s.policy.mutations.length === 0 && s.milestones.every((m) => m.steps.every((st) => !st.intent))).map((s) => s.id));
+  const dropped = [...new Set(manifest.cases.filter((c) => !ok.has(c.scenario_id)).map((c) => c.scenario_id))];
+  manifest.cases = manifest.cases.filter((c) => ok.has(c.scenario_id));
+  for (const id of dropped) manifest.omitted.push({ scenario_id: id, reason: 'read-only environment: scenario provisions fixtures or mutates' });
+  for (const e of manifest.exploration) manifest.omitted.push({ scenario_id: e.scenario_id, reason: 'read-only environment: exploration disabled' });
+  manifest.exploration = [];
+  manifest.explanation.push('read-only capability profile applied');
+}

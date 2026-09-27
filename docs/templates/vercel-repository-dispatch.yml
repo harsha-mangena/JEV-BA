@@ -1,0 +1,34 @@
+# Vercel for GitHub can send `repository_dispatch` events (vercel.deployment.ready)
+# when a deployment is ready — before production domain assignment when
+# Deployment Checks are enabled. Submit the candidate; the QA service verifies
+# it against the Vercel API (provider: vercel) and reports a blocking check.
+name: Submit Vercel deployment QA
+on:
+  repository_dispatch:
+    types: [vercel.deployment.ready]
+permissions: {}
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit candidate
+        env:
+          QA_API_URL: ${{ vars.QA_API_URL }}
+          QA_INGEST_TOKEN: ${{ secrets.QA_INGEST_TOKEN }}
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          p = json.loads(os.environ['PAYLOAD'])
+          body = {
+            'schema_version': 1, 'provider': 'vercel',
+            'deployment_id': p['id'],
+            'environment': 'production' if p.get('environment') == 'production' else 'preview',
+            'commit_sha': p['git']['sha'],
+            'candidate_url': p['url'] if p['url'].startswith('https://') else 'https://' + p['url'],
+            'ci_run_id': os.environ['GITHUB_RUN_ID'],
+          }
+          req = urllib.request.Request(os.environ['QA_API_URL'].rstrip('/') + '/v1/deployment-events', data=json.dumps(body).encode(),
+                                       headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['QA_INGEST_TOKEN']}, method='POST')
+          print('accepted (not a QA result):', json.load(urllib.request.urlopen(req, timeout=30))['run_id'])
+          PY

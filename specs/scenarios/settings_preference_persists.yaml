@@ -1,0 +1,39 @@
+schema_version: 1
+id: settings_preference_persists
+requirement_ids: [SETTINGS-01]
+mode: regression
+start_path: /settings
+fixture: customer_empty_v1
+role: customer
+goal: A saved theme preference survives a reload.
+milestones:
+  - id: preference_saved
+    action_intent: settings.save
+    steps:
+      - op: select
+        target: { label: Theme }
+        option: Dark
+      - op: click
+        target: { role: button, name: Save settings }
+        intent: settings.save
+    assertions:
+      - type: ui_visible
+        target: settings-saved
+      - type: ui_text
+        target: current-theme
+        equals: dark
+  - id: preference_survives_reload
+    steps:
+      - op: navigate
+        path: /settings
+    assertions:
+      - type: ui_text
+        target: current-theme
+        equals: dark
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_preference_write]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

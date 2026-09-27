@@ -1,0 +1,26 @@
+{
+  "name": "@qa/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "qa": "./src/main.ts"
+  },
+  "dependencies": {
+    "@qa/contracts": "*",
+    "@qa/evidence": "*",
+    "@qa/worker": "*",
+    "@qa/oracles": "*",
+    "@qa/fixture-test-app": "*",
+    "@qa/api": "*",
+    "@qa/orchestrator": "*",
+    "@qa/db": "*",
+    "yaml": "^2.6.0",
+    "@qa/quality": "*",
+    "@qa/coverage": "*",
+    "@qa/compiler": "*",
+    "@qa/calibration": "*",
+    "@qa/gate": "*",
+    "@qa/s1": "*"
+  }
+}
