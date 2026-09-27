@@ -1,0 +1,29 @@
+# Autonomous (S1-guided) variant of the checkout journey. Not part of the
+# required release suite until the gate is calibrated (plan Phase 8).
+schema_version: 1
+id: checkout_exploration
+requirement_ids: [CHECKOUT-01]
+mode: exploration
+start_path: /cart
+fixture: customer_cart_one_item_v1
+role: customer
+goal: Place the fixture order using the supplied delivery address.
+milestones:
+  - id: order_persisted
+    action_intent: checkout.submit
+    assertions:
+      - type: ui_visible
+        target: order-confirmation
+      - type: order_count_delta
+        customer_ref: fixture.customer_id
+        equals: 1
+      - type: order_total_minor_units
+        customer_ref: fixture.customer_id
+        equals_ref: fixture.expected_total_minor_units
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_order_create]
+  external_effects: sandbox_only
+  allowed_origin_profile: owned_checkout
+cleanup: delete_test_owned_entities

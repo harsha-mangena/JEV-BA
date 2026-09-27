@@ -1,0 +1,32 @@
+schema_version: 1
+id: sign_in
+requirement_ids: [AUTH-01]
+mode: regression
+critical: true
+start_path: /login
+fixture: customer_signed_out_v1
+role: customer
+goal: A customer signs in with valid credentials and lands on the product list.
+milestones:
+  - id: signed_in
+    steps:
+      - op: type
+        target: { label: Email }
+        value_ref: fixture.email
+      - op: type
+        target: { label: Password }
+        value_ref: secret.password
+      - op: click
+        target: { role: button, name: Sign in }
+    assertions:
+      - type: url_path
+        equals: /products
+      - type: ui_text
+        target: current-user
+        equals_ref: fixture.email
+execution_profiles: [chromium_desktop, chromium_mobile_viewport]
+policy:
+  environments: [local, preview, staging]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

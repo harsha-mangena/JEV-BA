@@ -1,0 +1,56 @@
+schema_version: 1
+id: notes_crud
+requirement_ids: [NOTES-01, NOTES-02]
+mode: regression
+start_path: /notes
+fixture: customer_empty_v1
+role: customer
+goal: Create a note, then delete it through the confirmation dialog.
+milestones:
+  - id: note_created
+    action_intent: notes.create
+    steps:
+      - op: type
+        target: { label: Note title }
+        value: Groceries
+      - op: type
+        target: { label: Note body }
+        value: Milk and eggs
+      - op: click
+        target: { role: button, name: Add note }
+        intent: notes.create
+    assertions:
+      - type: ui_text
+        target: notes-flash
+        equals: Note added.
+      - type: ui_text
+        target: note-title
+        equals: Groceries
+      - type: entity_count_delta
+        entity: note
+        owner_ref: fixture.customer_id
+        equals: 1
+  - id: note_deleted
+    action_intent: notes.delete
+    steps:
+      - op: click
+        target: { role: button, name: Delete Groceries }
+      - op: click
+        target: { role: button, name: Confirm delete }
+        intent: notes.delete
+    assertions:
+      - type: ui_visible
+        target: notes-empty
+      - type: entity_count_delta
+        entity: note
+        owner_ref: fixture.customer_id
+        equals: 0
+      - type: persists_after_reload
+        target: notes-empty
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_note_write]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

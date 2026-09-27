@@ -1,0 +1,6 @@
+node_modules/
+.qa-runs/
+test-results/
+*.log
+.env
+.env.*

@@ -1,0 +1,25 @@
+# Project policy for the controlled fixture application.
+# Mutation bindings map trusted action intents to named, test-owned effects.
+# A scenario may perform a bound intent only if it lists the mutation AND the
+# environment is permitted here. Model scores never grant permission.
+schema_version: 1
+project_id: fixture-shop
+environments: [local, preview, staging]
+origin_profiles:
+  owned_app:
+    origins: [$candidate]
+  owned_checkout:
+    origins: [$candidate]
+mutations:
+  test_owned_order_create:
+    action_intents: [checkout.submit]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_note_write:
+    action_intents: [notes.create, notes.update, notes.delete]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_preference_write:
+    action_intents: [settings.save]
+    environments: [local, preview, staging]
+    test_owned_only: true
