@@ -25,6 +25,7 @@ export const ReasonCode = z.enum([
   'no_assertions_executed',
   'autonomy_abstained',
   'provider_unavailable',
+  'visual_review_required',
 ]);
 export type ReasonCode = z.infer<typeof ReasonCode>;
 

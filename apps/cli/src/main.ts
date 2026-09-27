@@ -16,6 +16,8 @@ import { parseDefectList, startFixtureApp } from '@qa/fixture-test-app';
 import { FixtureClient } from '@qa/oracles';
 import { runSuite } from '@qa/worker';
 import * as svc from './service.ts';
+import * as baselineCmd from './baselines.ts';
+import { FindingLedger, FsBaselineStore } from '@qa/quality';
 
 const USAGE = `Usage: qa <command> [options]
 
@@ -23,6 +25,11 @@ Commands:
   validate                 Validate every scenario against the fixture catalog and project policy.
   run                      Run approved regression scenarios against a deployed target.
   demo                     Start the fixture app in-process (optionally with seeded defects) and run the suite.
+
+Visual baselines:
+  baseline pending         List visual checkpoints awaiting approval in a run (--run <run dir>).
+  baseline approve         Approve every pending candidate in a run (--run --approver --commit-sha [--baselines dir]).
+  baseline list            List approved baselines (--baselines dir).
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
@@ -76,6 +83,9 @@ const { positionals, values } = parseArgs({
     'fixture-api': { type: 'string' },
     'signed-out-path': { type: 'string', default: '/login' },
     defects: { type: 'string' },
+    baselines: { type: 'string', default: 'baselines' },
+    approver: { type: 'string' },
+    run: { type: 'string' },
     tenant: { type: 'string' },
     project: { type: 'string' },
     config: { type: 'string' },
@@ -141,7 +151,9 @@ async function execute(baseUrl: string, environment: string, fixtures: FixtureCl
     ac.abort();
   });
   const p = profiles();
+  const findings = await new FindingLedger(join(resolve(values.out!), 'findings.json')).load();
   const { report, runDir } = await runSuite({
+    quality: { baselines: new FsBaselineStore(resolve(values.baselines!)), findings },
     scenarios,
     policy,
     baseUrl,
@@ -191,6 +203,13 @@ async function main(): Promise<number> {
       } finally {
         await app.close();
       }
+    }
+    case 'baseline': {
+      const sub = positionals[1];
+      if (sub === 'pending') return baselineCmd.pending(values);
+      if (sub === 'approve') return baselineCmd.approve(values);
+      if (sub === 'list') return baselineCmd.list(values);
+      fail('usage: qa baseline pending|approve|list --run <run dir> [--baselines dir] [--approver name --commit-sha sha]');
     }
     case 'migrate':
       return svc.migrate();

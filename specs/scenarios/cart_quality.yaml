@@ -1,0 +1,26 @@
+schema_version: 1
+id: cart_quality
+requirement_ids: [UX-01, A11Y-01]
+mode: regression
+start_path: /cart
+fixture: customer_cart_one_item_v1
+role: customer
+goal: The cart renders without layout defects, detectable accessibility violations or unapproved visual changes.
+milestones:
+  - id: cart_rendered
+    assertions:
+      - type: ui_text
+        target: cart-total
+        equals_ref: fixture.expected_total_display
+      - type: layout_sound
+      - type: a11y_scan
+        fail_on: serious
+      - type: visual_match
+        checkpoint: cart
+        mask: [current-user]
+execution_profiles: [chromium_desktop, chromium_mobile_viewport]
+policy:
+  environments: [local, preview, staging]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

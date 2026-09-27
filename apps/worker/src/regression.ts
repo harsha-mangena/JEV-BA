@@ -5,6 +5,7 @@ import { Stop, type Driver } from './session.ts';
 function riskOf(step: Step, mutation: string | undefined): RiskClass {
   if (mutation) return 'test_owned_mutation';
   if (step.op === 'navigate' || step.op === 'reload') return 'read_only';
+  if (step.op === 'press') return step.key === 'Enter' || step.key === 'Space' ? 'unknown' : 'read_only';
   if (step.op === 'type' || step.op === 'select') return 'reversible_input';
   return 'unknown';
 }

@@ -2,13 +2,32 @@ import type { Page } from '@playwright/test';
 import { describeLocator, parseRef, type Assertion, type AssertionResult } from '@qa/contracts';
 import { pollUntil, resolveLocator } from '@qa/browser';
 import type { FixtureClient, OwnedOrder } from './fixture-client.ts';
+import { atOrAbove, captureCheckpoint, checkLayout, compareImages, diffSignature, focusIndicator, isFocused, renderingProfile, reviewDiff, scanAccessibility, type BaselineStore, type FindingLedger, type VisualReviewer } from '@qa/quality';
+import { createHash } from 'node:crypto';
 
 export interface EntityBaseline {
   orders: Map<string, OwnedOrder[]>;
   notes: Map<string, number>;
 }
 
+export interface QualityContext {
+  baselines: BaselineStore | null;
+  scenario_id: string;
+  execution_profile: string;
+  requirement_ids: string[];
+  commit_sha: string | null;
+  findings?: FindingLedger;
+  reviewer?: VisualReviewer;
+}
+
+export interface Attachment {
+  kind: 'visual_candidate' | 'visual_diff' | 'a11y';
+  name: string;
+  bytes: Buffer;
+}
+
 export interface AssertionContext {
+  quality?: QualityContext;
   page: Page;
   fixtureData: Record<string, string | number | boolean>;
   fixtures: FixtureClient;
@@ -17,7 +36,7 @@ export interface AssertionContext {
   timeoutMs: number;
 }
 
-type Evaluation = Omit<AssertionResult, 'milestone_id' | 'index' | 'elapsed_ms'>;
+export type Evaluation = Omit<AssertionResult, 'milestone_id' | 'index' | 'elapsed_ms'> & { attachments?: Attachment[] };
 
 /** Resolve a fixture reference. Secret references are rejected by semantic validation before this point. */
 export function fixtureValue(ctx: Pick<AssertionContext, 'fixtureData'>, ref: string): string | number | boolean {
@@ -114,6 +133,39 @@ export async function evaluateAssertion(a: Assertion, ctx: AssertionContext): Pr
       const r = await pollUntil(() => isVisibleUnique(ctx.page, a.target), (v) => v.visible, t);
       return { type: a.type, status: r.ok ? 'passed' : 'failed', expected: { target: describeLocator(a.target), visible_after_reload: true }, actual: r.value };
     }
+    case 'focused': {
+      const loc = resolveLocator(ctx.page, a.target);
+      const r = await pollUntil(() => isFocused(loc), (v) => v, t);
+      const active = await ctx.page.evaluate(() => {
+        const el = document.activeElement;
+        return el ? `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''} ${(el.getAttribute('aria-label') ?? (el as HTMLElement).innerText ?? '').trim().slice(0, 40)}` : null;
+      });
+      return { type: a.type, status: r.ok ? 'passed' : 'failed', expected: describeLocator(a.target), actual: active };
+    }
+    case 'focus_visible': {
+      const ind = await focusIndicator(ctx.page);
+      return { type: a.type, status: ind.visible ? 'passed' : 'failed', expected: 'visible focus indicator', actual: ind, ...(ind.visible ? {} : { message: ind.element ? `no focus indicator on ${ind.element}` : 'nothing is focused' }) };
+    }
+    case 'visual_match':
+      return visualMatch(a, ctx);
+    case 'a11y_scan': {
+      const all = await scanAccessibility(ctx.page, { disableRules: a.disable_rules });
+      const blocking = all.filter((v) => atOrAbove(v, a.fail_on));
+      for (const v of blocking) recordFinding(ctx, 'a11y', `a11y:${ctx.page.url()}`, `${v.id}:${v.targets[0] ?? ''}`, `${v.help} (${v.impact}, ${v.nodes} node(s))`);
+      return {
+        type: a.type,
+        status: blocking.length ? 'failed' : 'passed',
+        expected: { violations_at_or_above: a.fail_on, count: 0 },
+        actual: blocking.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, targets: v.targets })),
+        ...(blocking.length ? { message: blocking.map((v) => v.id).join(', ') } : {}),
+        attachments: [{ kind: 'a11y', name: `a11y-${Date.now()}.json`, bytes: Buffer.from(JSON.stringify(all, null, 2)) }],
+      };
+    }
+    case 'layout_sound': {
+      const issues = await checkLayout(ctx.page, a.checks);
+      for (const i of issues) recordFinding(ctx, 'layout', i.check, `${i.check}:${i.element}`, `${i.check}: ${i.element} — ${i.detail}`);
+      return { type: a.type, status: issues.length ? 'failed' : 'passed', expected: { issues: 0, checks: a.checks }, actual: issues, ...(issues.length ? { message: issues.map((i) => i.check).join(', ') } : {}) };
+    }
     case 'no_console_errors': {
       const errors = [...ctx.consoleErrors];
       return { type: a.type, status: errors.length === 0 ? 'passed' : 'failed', expected: [], actual: errors, ...(errors.length ? { message: `${errors.length} console error(s)` } : {}) };
@@ -128,4 +180,38 @@ export async function captureBaseline(fixtures: FixtureClient, owners: Iterable<
     baseline.notes.set(owner, (await fixtures.notes(owner)).length);
   }
   return baseline;
+}
+
+function recordFinding(ctx: AssertionContext, kind: 'a11y' | 'layout' | 'visual_diff', checkpoint: string, signature: string, summary: string): void {
+  const q = ctx.quality;
+  if (!q?.findings) return;
+  q.findings.record({ kind, scenario_id: q.scenario_id, checkpoint, execution_profile: q.execution_profile, requirement_ids: q.requirement_ids, certainty: 'suspected', summary, signature, commit_sha: q.commit_sha, evidence: ctx.page.url() });
+}
+
+async function visualMatch(a: Extract<Assertion, { type: 'visual_match' }>, ctx: AssertionContext): Promise<Evaluation> {
+  const q = ctx.quality;
+  const png = await captureCheckpoint(ctx.page, a.mask.map((m) => resolveLocator(ctx.page, m)), a.full_page);
+  const candidateSha = createHash('sha256').update(png).digest('hex');
+  const candidate: Attachment = { kind: 'visual_candidate', name: `visual/${a.checkpoint}.candidate.png`, bytes: png };
+  if (!q?.baselines) {
+    return { type: a.type, status: 'needs_review', expected: { checkpoint: a.checkpoint }, actual: { candidate_sha256: candidateSha }, message: 'no baseline store configured; candidate captured for review', attachments: [candidate] };
+  }
+  const key = { scenario_id: q.scenario_id, checkpoint: a.checkpoint, execution_profile: q.execution_profile, rendering_profile: renderingProfile(ctx.page) };
+  const base = await q.baselines.get(key);
+  if (!base) {
+    return { type: a.type, status: 'needs_review', expected: { checkpoint: a.checkpoint, baseline: null, key }, actual: { candidate_sha256: candidateSha }, message: 'no approved baseline for this checkpoint and rendering profile; approve the candidate to enable comparison', attachments: [candidate] };
+  }
+  const d = compareImages(base.png, png);
+  const ok = d.comparable && d.diff_ratio <= a.max_diff_ratio;
+  if (ok) return { type: a.type, status: 'passed', expected: { baseline_version: base.record.version, max_diff_ratio: a.max_diff_ratio }, actual: { diff_ratio: d.diff_ratio } };
+  recordFinding(ctx, 'visual_diff', a.checkpoint, diffSignature(d.bbox), `visual difference at checkpoint ${a.checkpoint}: ${d.detail}`);
+  const review = await reviewDiff(q.reviewer, { baseline: base.png, candidate: png, diff: d.diff_png, checkpoint: a.checkpoint, scenario_id: q.scenario_id });
+  return {
+    type: a.type,
+    status: 'failed',
+    expected: { baseline_version: base.record.version, baseline_sha256: base.record.sha256, max_diff_ratio: a.max_diff_ratio, key },
+    actual: { diff_ratio: d.diff_ratio, diff_pixels: d.diff_pixels, bbox: d.bbox, candidate_sha256: candidateSha, ...(review ? { review_hint: review } : {}) },
+    message: d.comparable ? `${(d.diff_ratio * 100).toFixed(3)}% of pixels differ` : d.detail,
+    attachments: [candidate, ...(d.diff_png ? [{ kind: 'visual_diff' as const, name: `visual/${a.checkpoint}.diff.png`, bytes: d.diff_png }] : [])],
+  };
 }

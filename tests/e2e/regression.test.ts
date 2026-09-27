@@ -83,9 +83,10 @@ describe('seeded defects', () => {
     expect(c.cleanup.status).toBe('done');
   });
 
-  it('the defect catalog is fully covered by the detection matrix', async () => {
+  it('the defect catalog is fully covered by the detection matrices', async () => {
     const { DEFECTS } = await import('@qa/fixture-test-app');
-    expect(new Set(DETECTION.map(([d]) => d))).toEqual(new Set(Object.keys(DEFECTS)));
+    const { QUALITY_DETECTION } = await import('./quality.test.ts');
+    expect(new Set([...DETECTION.map(([d]) => d), ...QUALITY_DETECTION.map(([d]) => d)])).toEqual(new Set(Object.keys(DEFECTS)));
     expect(ROOT).toBeTruthy();
   });
 });

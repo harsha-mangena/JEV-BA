@@ -17,7 +17,8 @@ import {
   type Verdict,
 } from '@qa/contracts';
 import { EvidenceLog } from '@qa/evidence';
-import { captureBaseline, evaluateAssertion, type EntityBaseline, type FixtureClient } from '@qa/oracles';
+import { captureBaseline, evaluateAssertion, type EntityBaseline, type Evaluation, type FixtureClient } from '@qa/oracles';
+import type { BaselineStore, FindingLedger, VisualReviewer } from '@qa/quality';
 
 export interface AttemptOptions {
   browser: Browser;
@@ -34,6 +35,14 @@ export interface AttemptOptions {
   signal?: AbortSignal;
   /** Durable cleanup obligations: called as soon as a fixture exists, and when cleanup settles. */
   hooks?: AttemptHooks;
+  quality?: QualityOptions;
+}
+
+export interface QualityOptions {
+  baselines: BaselineStore | null;
+  findings?: FindingLedger;
+  reviewer?: VisualReviewer;
+  commitSha?: string | null;
 }
 
 export interface AttemptHooks {
@@ -177,16 +186,38 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         const failed: AssertionResult[] = [];
         for (const [ai, a] of m.assertions.entries()) {
           const t0 = Date.now();
-          let r: Omit<AssertionResult, 'milestone_id' | 'index' | 'elapsed_ms'>;
+          let r: Evaluation;
           try {
-            r = await evaluateAssertion(a, { page: p, fixtureData: fx.data, fixtures: o.fixtures, baseline, consoleErrors, timeoutMs: s.budgets.assertion_timeout_ms });
+            r = await evaluateAssertion(a, {
+              page: p,
+              fixtureData: fx.data,
+              fixtures: o.fixtures,
+              baseline,
+              consoleErrors,
+              timeoutMs: s.budgets.assertion_timeout_ms,
+              quality: {
+                baselines: o.quality?.baselines ?? null,
+                scenario_id: s.id,
+                execution_profile: profile,
+                requirement_ids: s.requirement_ids,
+                commit_sha: o.quality?.commitSha ?? null,
+                ...(o.quality?.findings ? { findings: o.quality.findings } : {}),
+                ...(o.quality?.reviewer ? { reviewer: o.quality.reviewer } : {}),
+              },
+            });
           } catch (e) {
             r = { type: a.type, status: 'failed', message: `assertion could not be evaluated: ${(e as Error).message}` };
           }
-          const result: AssertionResult = { milestone_id: m.id, index: ai, elapsed_ms: Date.now() - t0, ...r };
+          const { attachments, ...plain } = r;
+          const refs: string[] = [];
+          for (const att of attachments ?? []) {
+            const ref = await log.writeArtifact(att.kind, `${m.id}/${att.name}`, att.bytes);
+            refs.push(`${ref.path}#sha256=${ref.sha256}`);
+          }
+          const result: AssertionResult = { milestone_id: m.id, index: ai, elapsed_ms: Date.now() - t0, ...plain, ...(refs.length ? { message: [plain.message, ...refs.map((x) => `artifact: ${x}`)].filter(Boolean).join('\n') } : {}) };
           assertions.push(result);
           log.record('assertion', `${m.id}#${ai} ${a.type}: ${result.status}`, { ...result });
-          if (result.status !== 'passed') failed.push(result);
+          if (result.status === 'failed' || result.status === 'not_run') failed.push(result);
         }
         await session.screenshot(m.id);
         if (failed.length === 0) {
@@ -212,9 +243,11 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
 
     const expectedCount = s.milestones.reduce((n, m) => n + m.assertions.length, 0);
     const passed = assertions.filter((a) => a.status === 'passed').length;
-    if (completed.length !== s.milestones.length || passed !== expectedCount || assertions.length !== expectedCount) {
+    const review = assertions.filter((a) => a.status === 'needs_review').length;
+    if (completed.length !== s.milestones.length || passed + review !== expectedCount || assertions.length !== expectedCount || passed === 0) {
       throw new Stop('ERROR', 'no_assertions_executed', `driver finished with ${completed.length}/${s.milestones.length} milestones and ${passed}/${expectedCount} assertions verified`);
     }
+    if (review > 0) throw new Stop('NEEDS_REVIEW', 'visual_review_required', `${review} visual checkpoint(s) have no approved baseline; every other assertion passed`);
     verdict = 'PASS';
     reason = null;
     message = null;

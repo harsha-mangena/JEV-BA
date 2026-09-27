@@ -1,5 +1,5 @@
 {
-  "name": "@qa/worker",
+  "name": "@qa/quality",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,14 +7,15 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.56.1",
     "@qa/browser": "*",
     "@qa/contracts": "*",
-    "@qa/evidence": "*",
-    "@qa/gate": "*",
-    "@qa/oracles": "*",
-    "@qa/s1": "*",
-    "@qa/s2": "*",
-    "@qa/quality": "*"
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5"
   }
 }

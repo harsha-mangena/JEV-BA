@@ -23,6 +23,8 @@ export function describeStep(step: Step): string {
       return `navigate ${step.path}`;
     case 'reload':
       return 'reload';
+    case 'press':
+      return `press ${step.key}${step.times > 1 ? ` ×${step.times}` : ''}`;
     case 'click':
       return `click ${describeLocator(step.target)}`;
     case 'type':
@@ -56,6 +58,16 @@ export async function executeStep(step: Step, ctx: StepContext): Promise<StepOut
     try {
       if (step.op === 'navigate') await page.goto(new URL(step.path, ctx.baseUrl).toString(), { timeout: timeoutMs, waitUntil: 'load' });
       else await page.reload({ timeout: timeoutMs, waitUntil: 'load' });
+      return { status: 'done', detail: describeStep(step) };
+    } catch (e) {
+      return { status: 'effect_unknown', reason: 'step_failed', detail: msg(e) };
+    }
+  }
+
+  if (step.op === 'press') {
+    try {
+      for (let i = 0; i < step.times; i++) await page.keyboard.press(step.key === 'Space' ? ' ' : step.key);
+      if (step.key === 'Enter' || step.key === 'Space') await settle(page, timeoutMs);
       return { status: 'done', detail: describeStep(step) };
     } catch (e) {
       return { status: 'effect_unknown', reason: 'step_failed', detail: msg(e) };

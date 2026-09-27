@@ -33,6 +33,8 @@ export const Step = z.discriminatedUnion('op', [
   z.object({ op: z.literal('type'), target: Locator, value: z.string().optional(), value_ref: ValueRef.optional(), ...stepBase }).strict(),
   z.object({ op: z.literal('select'), target: Locator, option: z.string().optional(), option_ref: ValueRef.optional(), ...stepBase }).strict(),
   z.object({ op: z.literal('reload'), ...stepBase }).strict(),
+  /** Keyboard input to the focused element; used for keyboard-only journeys. */
+  z.object({ op: z.literal('press'), key: z.enum(['Tab', 'Shift+Tab', 'Enter', 'Space', 'Escape', 'ArrowDown', 'ArrowUp']), times: z.number().int().min(1).max(50).default(1), ...stepBase }).strict(),
 ]).superRefine((s, ctx) => {
   if (s.op === 'type') exactlyOne(ctx, s, ['value', 'value_ref']);
   if (s.op === 'select') exactlyOne(ctx, s, ['option', 'option_ref']);
@@ -51,6 +53,35 @@ export const Assertion = z.discriminatedUnion('type', [
   z.object({ type: z.literal('entity_count_delta'), entity: z.enum(['order', 'note']), owner_ref: ValueRef, equals: integer }).strict(),
   z.object({ type: z.literal('persists_after_reload'), target: Locator }).strict(),
   z.object({ type: z.literal('no_console_errors') }).strict(),
+  /** Keyboard focus is on the target element. */
+  z.object({ type: z.literal('focused'), target: Locator }).strict(),
+  /** The focused element shows a visible focus indicator. */
+  z.object({ type: z.literal('focus_visible') }).strict(),
+  /** Pixel comparison against an approved, versioned baseline for this checkpoint and rendering profile. */
+  z
+    .object({
+      type: z.literal('visual_match'),
+      checkpoint: Slug,
+      mask: z.array(Locator).default([]),
+      max_diff_ratio: z.number().min(0).max(1).default(0.001),
+      full_page: z.boolean().default(true),
+    })
+    .strict(),
+  /** Automated accessibility scan (axe-core). Fails on violations at or above `fail_on`. Not a full accessibility audit. */
+  z
+    .object({
+      type: z.literal('a11y_scan'),
+      fail_on: z.enum(['minor', 'moderate', 'serious', 'critical']).default('serious'),
+      disable_rules: z.array(z.string()).default([]),
+    })
+    .strict(),
+  /** Code-based geometry checks. */
+  z
+    .object({
+      type: z.literal('layout_sound'),
+      checks: z.array(z.enum(['horizontal_overflow', 'overlapping_controls', 'obscured_controls', 'clipped_text'])).default(['horizontal_overflow', 'overlapping_controls', 'obscured_controls', 'clipped_text']),
+    })
+    .strict(),
 ]).superRefine((a, ctx) => {
   if (a.type === 'ui_text') exactlyOne(ctx, a, ['equals', 'equals_ref', 'contains']);
   if (a.type === 'order_total_minor_units') exactlyOne(ctx, a, ['equals', 'equals_ref']);

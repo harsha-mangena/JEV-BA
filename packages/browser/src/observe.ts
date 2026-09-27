@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ElementHandle, Page } from '@playwright/test';
 import type { Observation, ObservedElement } from '@qa/contracts';
+import { ensureEvalShim } from './shim.ts';
 
 /** Stays below the 255-option provider limit with room for NONE / NEED_MORE_CONTEXT. */
 export const DEFAULT_MAX_CANDIDATES = 200;
@@ -173,6 +174,7 @@ export interface ObserveOptions {
  */
 export async function observe(page: Page, o: ObserveOptions): Promise<Observation> {
   await page.waitForLoadState('load');
+  await ensureEvalShim(page);
   const raw = await page.evaluate(extractInPage, o.maxText ?? 120);
   const max = o.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
   const actionable = raw.elements.filter((e) => e.actionable);
@@ -209,6 +211,7 @@ export type NodeResolution = { ok: true; handle: ElementHandle<Element> } | { ok
 
 /** Resolve a node id from an observation against the *current* document. */
 export async function resolveNode(page: Page, documentId: string, nodeId: string): Promise<NodeResolution> {
+  await ensureEvalShim(page);
   const handle = await page.evaluateHandle(
     ([doc, id]) => {
       const reg = (window as unknown as { __qaRegistry?: { documentId: string; nodes: Map<string, Element> } }).__qaRegistry;

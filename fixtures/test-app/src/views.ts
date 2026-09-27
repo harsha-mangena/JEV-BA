@@ -22,7 +22,7 @@ button{padding:8px 14px;font:inherit;cursor:pointer;margin-top:12px}.actions{dis
 table{width:100%;border-collapse:collapse}td,th{padding:6px;border-bottom:1px solid #ddd;text-align:left}
 dialog{max-width:90vw}`;
 
-export function layout(opts: { title: string; user?: User | null; revision: string; body: string; script?: string }): string {
+export function layout(opts: { title: string; user?: User | null; revision: string; body: string; script?: string; extraCss?: string; extraBody?: string }): string {
   const nav = opts.user
     ? `<nav aria-label="Primary"><ul>
         <li><a href="/products">Products</a></li><li><a href="/cart">Cart</a></li>
@@ -32,8 +32,8 @@ export function layout(opts: { title: string; user?: User | null; revision: stri
     : '';
   return `<!doctype html><html lang="en" data-theme="${opts.user?.preferences.theme ?? 'light'}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="build-revision" content="${esc(opts.revision)}">
-<title>${esc(opts.title)} · Fixture Shop</title><style>${STYLE}</style></head>
-<body><header><strong>Fixture Shop</strong>${nav}</header><main id="main"><h1>${esc(opts.title)}</h1>${opts.body}</main>
+<title>${esc(opts.title)} · Fixture Shop</title><style>${STYLE}${opts.extraCss ?? ''}</style></head>
+<body><header><strong>Fixture Shop</strong>${nav}</header><main id="main"><h1>${esc(opts.title)}</h1>${opts.body}</main>${opts.extraBody ?? ''}
 ${opts.script ? `<script>${opts.script}</script>` : ''}</body></html>`;
 }
 
@@ -63,6 +63,7 @@ export function cartPage(opts: {
   ambiguousLabels: boolean;
   checkoutDisabled: boolean;
   cartVersion: string;
+  unlabeledAddress?: boolean;
 }): string {
   if (opts.lines.length === 0) {
     return `${opts.error ? `<p role="alert" class="error" data-testid="checkout-error">${esc(opts.error)}</p>` : ''}
@@ -83,7 +84,7 @@ export function cartPage(opts: {
 ${opts.error ? `<p role="alert" class="error" id="address-error" data-testid="address-error">${esc(opts.error)}</p>` : ''}
 <form method="post" action="/checkout" id="checkout-form" aria-label="Checkout">
   <input type="hidden" name="cart_version" value="${esc(opts.cartVersion)}">
-  <label for="delivery_address">Delivery address</label>
+  ${opts.unlabeledAddress ? '' : '<label for="delivery_address">Delivery address</label>'}
   <textarea id="delivery_address" name="delivery_address" rows="2"${opts.error ? ' aria-invalid="true" aria-describedby="address-error"' : ''}>${esc(opts.address ?? '')}</textarea>
   <div class="actions">
     <button type="submit" data-testid="place-order"${opts.checkoutDisabled ? ' disabled' : ''}>${placeLabel}</button>

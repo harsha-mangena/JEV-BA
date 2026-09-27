@@ -8,7 +8,7 @@ import { toHtml, toJUnit } from '@qa/evidence';
 import type { FixtureClient } from '@qa/oracles';
 import { runCaseAttempt } from './case.ts';
 import type { ExplorationOptions } from './exploration.ts';
-import type { AttemptHooks } from './session.ts';
+import type { AttemptHooks, QualityOptions } from './session.ts';
 
 export interface SuiteOptions {
   scenarios: Scenario[];
@@ -35,6 +35,7 @@ export interface SuiteOptions {
   /** Restrict execution to these cases (sharding). Defaults to every scenario × profile. */
   cases?: Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
   hooks?: AttemptHooks;
+  quality?: QualityOptions;
 }
 
 export interface SuiteResult {
@@ -110,7 +111,7 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
           }
           const attempts: CaseResult[] = [];
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}) });
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
           }
@@ -166,6 +167,7 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
     cases,
     gate: { eligible: gate.eligible && cleanupFailures.length === 0, reasons: gate.reasons },
   };
+  await o.quality?.findings?.save();
   await writeFile(join(runDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(join(runDir, 'junit.xml'), toJUnit(report));
   await writeFile(join(runDir, 'report.html'), toHtml(report));

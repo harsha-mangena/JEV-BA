@@ -89,8 +89,14 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
   };
   const bumpCart = (userId: string) => cartVersions.delete(userId);
 
-  const page = (res: ServerResponse, status: number, title: string, user: User | null, body: string, script?: string) =>
-    send(res, status, v.layout({ title, user, revision, body, ...(script ? { script } : {}) }));
+  const defectCss = () =>
+    [
+      has('mobile_horizontal_overflow') ? 'table{min-width:900px}' : '',
+      has('focus_outline_removed') ? '*:focus,*:focus-visible{outline:none!important;box-shadow:none!important}' : '',
+      has('header_restyled') ? 'header{background:#6b2fb3!important}' : '',
+    ].join('');
+  const page = (res: ServerResponse, status: number, title: string, user: User | null, body: string, script?: string, extraBody?: string) =>
+    send(res, status, v.layout({ title, user, revision, body, extraCss: defectCss(), ...(script ? { script } : {}), ...(extraBody ? { extraBody } : {}) }));
 
   function renderCart(res: ServerResponse, user: User, status: number, extra: { error?: string; saved?: boolean; address?: string } = {}) {
     const lines = (store.carts.get(user.id) ?? []).map((l) => {
@@ -104,8 +110,10 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       ambiguousLabels: has('ambiguous_checkout_labels'),
       checkoutDisabled: has('checkout_button_disabled'),
       cartVersion: cartVersion(user.id),
+      unlabeledAddress: has('address_label_missing'),
     });
-    page(res, status, 'Your cart', user, body, has('cart_console_error') ? "throw new Error('cart widget failed to initialise')" : undefined);
+    const promo = has('promo_overlay') ? '<div data-testid="promo" style="position:fixed;left:0;right:0;top:120px;bottom:0;background:#fff3c4;z-index:10;padding:16px">Spring sale — 10% off everything!</div>' : undefined;
+    page(res, status, 'Your cart', user, body, has('cart_console_error') ? "throw new Error('cart widget failed to initialise')" : undefined, promo);
   }
 
   async function handleQa(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {

@@ -14,6 +14,11 @@ export const DEFECTS = {
   ambiguous_checkout_labels: 'Checkout and save-for-later buttons both read "Continue".',
   cart_console_error: 'The cart page throws an uncaught script error.',
   checkout_button_disabled: 'The place-order button is rendered disabled.',
+  mobile_horizontal_overflow: 'The cart table forces a 900px minimum width, so narrow viewports scroll horizontally.',
+  promo_overlay: 'A fixed promotional banner covers the checkout controls.',
+  address_label_missing: 'The delivery address field has no label or accessible name.',
+  focus_outline_removed: 'Global CSS removes the focus outline from every element.',
+  header_restyled: 'The header background colour changes (an unapproved visual change).',
 } as const;
 
 export type DefectId = keyof typeof DEFECTS;

@@ -9,6 +9,7 @@
   "dependencies": {
     "@qa/contracts": "*",
     "@playwright/test": "1.56.1",
-    "@qa/browser": "*"
+    "@qa/browser": "*",
+    "@qa/quality": "*"
   }
 }

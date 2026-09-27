@@ -32,7 +32,7 @@ export const AssertionResult = z.object({
   milestone_id: z.string(),
   index: z.number().int(),
   type: z.string(),
-  status: z.enum(['passed', 'failed', 'not_run']),
+  status: z.enum(['passed', 'failed', 'not_run', 'needs_review']),
   expected: z.unknown().optional(),
   actual: z.unknown().optional(),
   message: z.string().optional(),
@@ -41,7 +41,7 @@ export const AssertionResult = z.object({
 export type AssertionResult = z.infer<typeof AssertionResult>;
 
 export const ArtifactRef = z.object({
-  kind: z.enum(['screenshot', 'trace', 'events', 'report', 'dom']),
+  kind: z.enum(['screenshot', 'trace', 'events', 'report', 'dom', 'visual_candidate', 'visual_diff', 'a11y']),
   path: z.string(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   bytes: z.number().int().nonnegative(),

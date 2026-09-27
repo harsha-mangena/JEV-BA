@@ -1,0 +1,49 @@
+schema_version: 1
+id: keyboard_checkout
+requirement_ids: [A11Y-02, CHECKOUT-01]
+mode: regression
+start_path: /cart
+fixture: customer_cart_one_item_v1
+role: customer
+goal: A keyboard-only customer can reach the address field and place the order with visible focus throughout.
+milestones:
+  - id: address_reached
+    steps:
+      # Header: Products, Cart, Orders, Notes, Settings, Sign out → 7th stop is the address field.
+      - op: press
+        key: Tab
+        times: 7
+    assertions:
+      - type: focused
+        target: { label: Delivery address }
+      - type: focus_visible
+  - id: submit_reached
+    steps:
+      - op: type
+        target: { label: Delivery address }
+        value_ref: fixture.delivery_address
+      - op: press
+        key: Tab
+    assertions:
+      - type: focused
+        target: { role: button, name: Place order }
+      - type: focus_visible
+  - id: order_placed
+    action_intent: checkout.submit
+    steps:
+      - op: press
+        key: Enter
+        intent: checkout.submit
+    assertions:
+      - type: ui_visible
+        target: order-confirmation
+      - type: order_count_delta
+        customer_ref: fixture.customer_id
+        equals: 1
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_order_create]
+  external_effects: sandbox_only
+  allowed_origin_profile: owned_checkout
+cleanup: delete_test_owned_entities
