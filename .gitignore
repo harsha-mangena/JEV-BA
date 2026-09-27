@@ -4,3 +4,4 @@ test-results/
 *.log
 .env
 .env.*
+.qa-work/

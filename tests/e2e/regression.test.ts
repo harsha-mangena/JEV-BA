@@ -70,6 +70,7 @@ const DETECTION: Array<[DefectId, string, string]> = [
   ['ambiguous_checkout_labels', 'checkout_existing_customer', 'step_target_unavailable'],
   ['cart_console_error', 'checkout_existing_customer', 'assertion_failed'],
   ['checkout_button_disabled', 'checkout_existing_customer', 'step_target_unavailable'],
+  ['checkout_button_renamed', 'checkout_existing_customer', 'step_target_unavailable'],
 ];
 
 describe('seeded defects', () => {

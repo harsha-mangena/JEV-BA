@@ -18,6 +18,7 @@ import { runSuite } from '@qa/worker';
 import * as svc from './service.ts';
 import * as baselineCmd from './baselines.ts';
 import * as coverageCmd from './coverage.ts';
+import * as compileCmd from './compile.ts';
 import { FindingLedger, FsBaselineStore } from '@qa/quality';
 
 const USAGE = `Usage: qa <command> [options]
@@ -40,6 +41,11 @@ Change impact and proposals:
   proposals generate       Propose boundary/negative scenarios from input equivalence classes.
   proposals validate <id>  Validate a proposal's oracles and references.
   proposals approve <id>   Promote a valid proposal into specs/scenarios (--approver).
+
+Regression compilation and repairs:
+  compile                  Compile a passed exploration case into a proposal + Playwright export (--run --scenario).
+  repair propose           Propose a locator repair from a step_target_unavailable failure (--run --scenario).
+  repair apply             Validate and apply a repair (--config <repair.json> --approver); semantic changes are refused.
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
@@ -230,6 +236,10 @@ async function main(): Promise<number> {
       return coverageCmd.coverage(positionals[1], values);
     case 'proposals':
       return coverageCmd.proposals(positionals[1], positionals[2], values);
+    case 'compile':
+      return compileCmd.compile(values);
+    case 'repair':
+      return compileCmd.repair(positionals[1], values);
     case 'migrate':
       return svc.migrate();
     case 'bootstrap':

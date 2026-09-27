@@ -17,6 +17,7 @@
     "@qa/db": "*",
     "yaml": "^2.6.0",
     "@qa/quality": "*",
-    "@qa/coverage": "*"
+    "@qa/coverage": "*",
+    "@qa/compiler": "*"
   }
 }

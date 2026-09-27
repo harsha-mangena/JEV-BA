@@ -111,6 +111,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       checkoutDisabled: has('checkout_button_disabled'),
       cartVersion: cartVersion(user.id),
       unlabeledAddress: has('address_label_missing'),
+      renamedCheckout: has('checkout_button_renamed'),
     });
     const promo = has('promo_overlay') ? '<div data-testid="promo" style="position:fixed;left:0;right:0;top:120px;bottom:0;background:#fff3c4;z-index:10;padding:16px">Spring sale — 10% off everything!</div>' : undefined;
     page(res, status, 'Your cart', user, body, has('cart_console_error') ? "throw new Error('cart widget failed to initialise')" : undefined, promo);

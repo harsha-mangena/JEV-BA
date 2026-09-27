@@ -19,6 +19,7 @@ export const DEFECTS = {
   address_label_missing: 'The delivery address field has no label or accessible name.',
   focus_outline_removed: 'Global CSS removes the focus outline from every element.',
   header_restyled: 'The header background colour changes (an unapproved visual change).',
+  checkout_button_renamed: 'Intended copy change: "Place order" becomes "Place your order" (exercises locator repair).',
 } as const;
 
 export type DefectId = keyof typeof DEFECTS;

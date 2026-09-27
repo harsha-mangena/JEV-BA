@@ -64,6 +64,7 @@ export function cartPage(opts: {
   checkoutDisabled: boolean;
   cartVersion: string;
   unlabeledAddress?: boolean;
+  renamedCheckout?: boolean;
 }): string {
   if (opts.lines.length === 0) {
     return `${opts.error ? `<p role="alert" class="error" data-testid="checkout-error">${esc(opts.error)}</p>` : ''}
@@ -72,7 +73,7 @@ export function cartPage(opts: {
   const rows = opts.lines
     .map((l) => `<tr><td>${esc(l.name)}</td><td>${l.quantity}</td><td>${money(l.line_minor_units)}</td></tr>`)
     .join('');
-  const placeLabel = opts.ambiguousLabels ? 'Continue' : 'Place order';
+  const placeLabel = opts.ambiguousLabels ? 'Continue' : opts.renamedCheckout ? 'Place your order' : 'Place order';
   const saveLabel = opts.ambiguousLabels ? 'Continue' : 'Save cart for later';
   return `${opts.saved ? '<p role="status" class="ok" data-testid="cart-saved">Cart saved for later.</p>' : ''}
 <section aria-labelledby="cart-heading"><h2 id="cart-heading">Items</h2>
