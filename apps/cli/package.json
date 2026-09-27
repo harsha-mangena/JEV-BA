@@ -11,6 +11,10 @@
     "@qa/evidence": "*",
     "@qa/worker": "*",
     "@qa/oracles": "*",
-    "@qa/fixture-test-app": "*"
+    "@qa/fixture-test-app": "*",
+    "@qa/api": "*",
+    "@qa/orchestrator": "*",
+    "@qa/db": "*",
+    "yaml": "^2.6.0"
   }
 }

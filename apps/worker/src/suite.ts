@@ -8,6 +8,7 @@ import { toHtml, toJUnit } from '@qa/evidence';
 import type { FixtureClient } from '@qa/oracles';
 import { runCaseAttempt } from './case.ts';
 import type { ExplorationOptions } from './exploration.ts';
+import type { AttemptHooks } from './session.ts';
 
 export interface SuiteOptions {
   scenarios: Scenario[];
@@ -31,6 +32,9 @@ export interface SuiteOptions {
   onCase?: (c: CaseResult) => void;
   /** Enables exploration scenarios (S1-guided). Their results are advisory unless explicitly required. */
   exploration?: ExplorationOptions;
+  /** Restrict execution to these cases (sharding). Defaults to every scenario × profile. */
+  cases?: Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
+  hooks?: AttemptHooks;
 }
 
 export interface SuiteResult {
@@ -84,9 +88,9 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
   await mkdir(runDir, { recursive: true });
   const startedAt = new Date().toISOString();
 
-  const planned: PlannedCase[] = o.scenarios.flatMap((scenario) =>
-    scenario.execution_profiles.filter((p) => !o.profiles || o.profiles.includes(p)).map((profile) => ({ scenario, profile })),
-  );
+  const planned: PlannedCase[] = o.scenarios
+    .flatMap((scenario) => scenario.execution_profiles.filter((p) => !o.profiles || o.profiles.includes(p)).map((profile) => ({ scenario, profile })))
+    .filter((p) => !o.cases || o.cases.some((c) => c.scenario_id === p.scenario.id && c.execution_profile === p.profile));
   const expected = planned.map((p) => ({ scenario_id: p.scenario.id, execution_profile: p.profile }));
   let cases: CaseResult[] = [];
 
@@ -106,7 +110,7 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
           }
           const attempts: CaseResult[] = [];
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}) });
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
           }

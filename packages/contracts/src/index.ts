@@ -8,3 +8,5 @@ export * from './verdict.ts';
 export * from './observation.ts';
 export * from './decision.ts';
 export * from './evidence.ts';
+export * from './project.ts';
+export * from './selection.ts';

@@ -32,6 +32,13 @@ export interface AttemptOptions {
   /** Path the app redirects to when a session is missing; detects expired/invalid auth fixtures. */
   signedOutPath?: string;
   signal?: AbortSignal;
+  /** Durable cleanup obligations: called as soon as a fixture exists, and when cleanup settles. */
+  hooks?: AttemptHooks;
+}
+
+export interface AttemptHooks {
+  fixtureProvisioned?(fixtureId: string): Promise<void>;
+  cleanupSettled?(fixtureId: string, ok: boolean, detail: string): Promise<void>;
 }
 
 /** Thrown by drivers to end an attempt with an explicit, non-PASS classification. */
@@ -106,6 +113,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
     } catch (e) {
       throw new Stop('ERROR', 'fixture_error', `fixture ${s.fixture}: ${(e as Error).message}`);
     }
+    await o.hooks?.fixtureProvisioned?.(fixture.fixture_id);
     for (const v of Object.values(fixture.secrets)) log.redactor.register(v);
     for (const c of fixture.auth?.cookies ?? []) log.redactor.register(c.value);
     log.record('fixture_provisioned', `fixture ${fixture.name}`, { fixture_id: fixture.fixture_id, fields: Object.keys(fixture.data), signed_in: !!fixture.auth });
@@ -248,6 +256,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         cleanup = { status: 'failed', detail: (e as Error).message };
       }
       log.record('cleanup', `cleanup ${cleanup.status}`, { fixture_id: fixture.fixture_id, ...cleanup });
+      await o.hooks?.cleanupSettled?.(fixture.fixture_id, cleanup.status === 'done', cleanup.detail ?? '').catch((e: Error) => log.record('cleanup', `cleanup hook failed: ${e.message}`));
     } else if (!fixture && cleanup.status === 'pending') {
       cleanup = { status: 'skipped', detail: 'no fixture was provisioned' };
     }

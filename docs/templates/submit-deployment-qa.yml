@@ -1,0 +1,56 @@
+# Copy into the application repository as .github/workflows/submit-deployment-qa.yml.
+# Submitting only registers the candidate; the QA service later publishes the
+# required check `autonomous-qa/<project>/<environment>/required` on the exact SHA.
+#
+# Note: deployment_status events created with GITHUB_TOKEN do not trigger other
+# workflows. If your deploy step uses GITHUB_TOKEN, prefer the QA service's
+# GitHub webhook (POST /v1/webhooks/github) or `qa submit` as a dependent job
+# in the deploying workflow.
+name: Submit deployment QA
+on:
+  deployment_status:
+permissions: {}
+jobs:
+  submit:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      (github.event.deployment.environment == 'preview' ||
+       github.event.deployment.environment == 'staging')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit verified deployment candidate
+        env:
+          QA_API_URL: ${{ vars.QA_API_URL }}
+          QA_INGEST_TOKEN: ${{ secrets.QA_INGEST_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from urllib.parse import urlsplit
+          with open(os.environ['GITHUB_EVENT_PATH']) as f:
+              event = json.load(f)
+          payload = {
+              'schema_version': 1,
+              'provider': 'github',
+              'repository_id': event['repository']['id'],
+              'deployment_id': str(event['deployment']['id']),
+              'deployment_status_id': str(event['deployment_status']['id']),
+              'environment': event['deployment']['environment'],
+              'commit_sha': event['deployment']['sha'],
+              'candidate_url': event['deployment_status'].get('environment_url'),
+              'ci_run_id': os.environ['GITHUB_RUN_ID'],
+          }
+          base = os.environ['QA_API_URL'].rstrip('/')
+          assert urlsplit(base).scheme == 'https'
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          request = urllib.request.Request(
+              base + '/v1/deployment-events',
+              data=json.dumps(payload).encode(),
+              headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['QA_INGEST_TOKEN']},
+              method='POST',
+          )
+          with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+              result = json.load(response)
+          print('QA submission accepted (not a QA result):', result['run_id'])
+          PY

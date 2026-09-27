@@ -15,6 +15,7 @@ import {
 import { parseDefectList, startFixtureApp } from '@qa/fixture-test-app';
 import { FixtureClient } from '@qa/oracles';
 import { runSuite } from '@qa/worker';
+import * as svc from './service.ts';
 
 const USAGE = `Usage: qa <command> [options]
 
@@ -22,6 +23,18 @@ Commands:
   validate                 Validate every scenario against the fixture catalog and project policy.
   run                      Run approved regression scenarios against a deployed target.
   demo                     Start the fixture app in-process (optionally with seeded defects) and run the suite.
+
+Service commands (need DATABASE_URL):
+  migrate                  Apply database migrations.
+  bootstrap                Create/update a tenant and project; mint tokens (--tenant --project --config
+                           [--repository-id --repository --webhook-secret-env --installation-id] [--token role:label]...)
+  serve-api                Run the control API (--port).
+  serve-worker             Run a job worker (--out).
+
+Client commands (need QA_API_TOKEN):
+  submit                   Submit a deployment candidate (--api-url, then --github-event <file> or
+                           --deployment-id --environment --commit-sha --candidate-url [--provider --project]).
+  wait                     Wait for a run (--api-url --run-id [--timeout s]); exit 0 only if the gate is eligible.
 
 Common options:
   --specs <dir>            Specs directory (default: ./specs)
@@ -63,6 +76,22 @@ const { positionals, values } = parseArgs({
     'fixture-api': { type: 'string' },
     'signed-out-path': { type: 'string', default: '/login' },
     defects: { type: 'string' },
+    tenant: { type: 'string' },
+    project: { type: 'string' },
+    config: { type: 'string' },
+    'repository-id': { type: 'string' },
+    repository: { type: 'string' },
+    'webhook-secret-env': { type: 'string' },
+    'installation-id': { type: 'string' },
+    token: { type: 'string', multiple: true },
+    port: { type: 'string' },
+    host: { type: 'string' },
+    'api-url': { type: 'string' },
+    'github-event': { type: 'string' },
+    provider: { type: 'string' },
+    'candidate-url': { type: 'string' },
+    'run-id': { type: 'string' },
+    timeout: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
 });
@@ -163,6 +192,18 @@ async function main(): Promise<number> {
         await app.close();
       }
     }
+    case 'migrate':
+      return svc.migrate();
+    case 'bootstrap':
+      return svc.bootstrap(values);
+    case 'serve-api':
+      return svc.serveApi(values);
+    case 'serve-worker':
+      return svc.serveWorker(values);
+    case 'submit':
+      return svc.submit(values);
+    case 'wait':
+      return svc.wait(values);
     default:
       fail(`unknown command ${cmd}\n\n${USAGE}`);
   }
@@ -172,6 +213,7 @@ main().then(
   (code) => process.exit(code),
   (e: unknown) => {
     if (e instanceof ContractError) fail(`contract error: ${e.message}`);
+    if (e instanceof svc.UsageError) fail(e.message);
     console.error(e);
     process.exit(2);
   },
