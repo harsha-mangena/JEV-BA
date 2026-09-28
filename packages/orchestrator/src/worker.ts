@@ -2,7 +2,9 @@ import { hostname } from 'node:os';
 import type pg from 'pg';
 import { evaluateReleaseGate, type CaseResult, type ExecutionProfileId } from '@qa/contracts';
 import { FixtureClient } from '@qa/oracles';
-import { runSuite, type ExplorationOptions } from '@qa/worker';
+import { recoverIntents, runSuite, type ExplorationOptions } from '@qa/worker';
+import { autonomyMode, type GateConfig } from '@qa/gate';
+import { PgIntentStore } from './intents.ts';
 import { basename } from 'node:path';
 import { uploadDir } from '@qa/evidence';
 import { FindingLedger } from '@qa/quality';
@@ -20,6 +22,8 @@ export interface Job {
   payload: Record<string, unknown>;
   attempts: number;
   max_attempts: number;
+  /** Lease fence: incremented on every lease; writes are accepted only under the current fence. */
+  fence: number;
 }
 
 export interface WorkerOptions {
@@ -62,24 +66,36 @@ export class JobWorker {
     this.o.log?.(`[${this.id}] ${msg}`);
   }
 
+  /**
+   * Lease one job with atomic tenant admission: the tenant row is locked
+   * while its active leases are counted, so concurrent workers can never
+   * exceed a tenant's quota. Tenants with the fewest active leases go first.
+   * Each lease increments the job's fence; every later write is fenced.
+   */
   async lease(): Promise<Job | null> {
     const lease = this.o.leaseSeconds ?? 60;
-    const r = await this.db.query<Job>(
-      `with active as (
-         select tenant_id, count(*) n from jobs where state='leased' and lease_expires_at >= now() group by tenant_id
-       ), candidate as (
-         select j.id from jobs j join tenants t on t.id = j.tenant_id left join active a on a.tenant_id = j.tenant_id
-         where ((j.state='queued' and j.available_at <= now()) or (j.state='leased' and j.lease_expires_at < now()))
-           and coalesce(a.n, 0) < t.max_concurrent_jobs
-         order by coalesce(a.n, 0), j.available_at, j.id
-         limit 1 for update of j skip locked
-       )
-       update jobs set state='leased', lease_owner=$1, lease_expires_at=now() + make_interval(secs => $2), attempts=attempts+1, updated_at=now()
-       from candidate where jobs.id = candidate.id
-       returning jobs.id::text, jobs.tenant_id, jobs.run_id, jobs.kind, jobs.payload, jobs.attempts, jobs.max_attempts`,
-      [this.id, lease],
-    );
-    return r.rows[0] ?? null;
+    const ready = `((j.state='queued' and j.available_at <= now()) or (j.state='leased' and j.lease_expires_at < now()))`;
+    return this.db.tx(async (c) => {
+      const tenants = (await c.query<{ id: string }>(
+        `select t.id from tenants t
+         where exists (select 1 from jobs j where j.tenant_id = t.id and ${ready})
+         order by (select count(*) from jobs a where a.tenant_id = t.id and a.state='leased' and a.lease_expires_at >= now()), t.id`,
+      )).rows;
+      for (const t of tenants) {
+        const locked = await c.query<{ max_concurrent_jobs: number }>('select max_concurrent_jobs from tenants where id=$1 for update skip locked', [t.id]);
+        if (locked.rowCount === 0) continue;
+        const active = (await c.query<{ n: number }>(`select count(*)::int n from jobs where tenant_id=$1 and state='leased' and lease_expires_at >= now()`, [t.id])).rows[0]!.n;
+        if (active >= locked.rows[0]!.max_concurrent_jobs) continue;
+        const r = await c.query<Job>(
+          `update jobs set state='leased', lease_owner=$1, lease_expires_at=now() + make_interval(secs => $2), attempts=attempts+1, fence=fence+1, updated_at=now()
+           where id = (select j.id from jobs j where j.tenant_id=$3 and ${ready} order by j.available_at, j.id limit 1 for update skip locked)
+           returning id::text, tenant_id, run_id, kind, payload, attempts, max_attempts, fence::int`,
+          [this.id, lease, t.id],
+        );
+        if (r.rows[0]) return r.rows[0];
+      }
+      return null;
+    });
   }
 
   /** Lease and process one job. Returns false when nothing was available. */
@@ -92,12 +108,12 @@ export class JobWorker {
     }
     const lease = this.o.leaseSeconds ?? 60;
     const beat = setInterval(() => {
-      void this.db.query(`update jobs set lease_expires_at=now() + make_interval(secs => $3) where id=$1 and lease_owner=$2 and state='leased'`, [job.id, this.id, lease]).catch(() => undefined);
+      void this.db.query(`update jobs set lease_expires_at=now() + make_interval(secs => $3) where id=$1 and fence=$2 and state='leased'`, [job.id, job.fence, lease]).catch(() => undefined);
     }, (lease * 1000) / 3);
     try {
       this.log(`${job.kind} ${job.run_id ?? ''} (attempt ${job.attempts})`);
       await this.handle(job);
-      await this.db.query(`update jobs set state='done', updated_at=now() where id=$1 and lease_owner=$2 and state='leased'`, [job.id, this.id]);
+      await this.db.query(`update jobs set state='done', updated_at=now() where id=$1 and fence=$2 and state='leased'`, [job.id, job.fence]);
     } catch (e) {
       const msg = (e as Error).message;
       this.log(`${job.kind} failed: ${msg}`);
@@ -105,7 +121,7 @@ export class JobWorker {
       else {
         // Full jitter, capped: spreads retries after shared outages.
         const delay = Math.random() * Math.min(300, 2 ** job.attempts);
-        await this.db.query(`update jobs set state='queued', lease_owner=null, lease_expires_at=null, last_error=$2, available_at=now() + make_interval(secs => $3), updated_at=now() where id=$1 and lease_owner=$4`, [job.id, msg, delay, this.id]);
+        await this.db.query(`update jobs set state='queued', lease_owner=null, lease_expires_at=null, last_error=$2, available_at=now() + make_interval(secs => $3), updated_at=now() where id=$1 and fence=$4 and state='leased'`, [job.id, msg, delay, job.fence]);
       }
     } finally {
       clearInterval(beat);
@@ -232,12 +248,17 @@ export class JobWorker {
     const cases = job.payload.cases as Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
     const advisory = job.payload.advisory === true;
 
+    // Resolve anything an earlier lease of this shard may have dispatched before running it again.
+    const intents = new PgIntentStore(this.db, { tenant_id: run.tenant_id, run_id: run.id, run_attempt: run.attempt, shard: Number(job.payload.shard), job_id: job.id, fence: job.fence });
+    for (const r of await recoverIntents(intents, fixtures, { settleMs: 10_000 })) this.log(`recovered intent ${r.intent_id}: ${r.state} (${r.detail ?? ''})`);
+
     const ac = new AbortController();
     const poll = setInterval(() => {
       void this.db
-        .one<{ state: string; cancel_requested: boolean; attempt: number }>('select state, cancel_requested, attempt from runs where id=$1', [run.id])
+        .one<{ state: string; cancel_requested: boolean; attempt: number; fence: number | null }>('select state, cancel_requested, attempt, (select fence::int from jobs where id=$2) fence from runs where id=$1', [run.id, job.id])
         .then((r) => {
-          if (!r || r.cancel_requested || r.state === 'SUPERSEDED' || r.state === 'CANCELLED' || r.attempt !== run.attempt) ac.abort();
+          // A lost fence means another worker now owns this shard: stop dispatching at once.
+          if (!r || r.cancel_requested || r.state === 'SUPERSEDED' || r.state === 'CANCELLED' || r.attempt !== run.attempt || r.fence !== job.fence) ac.abort();
         })
         .catch(() => undefined);
     }, this.o.cancelPollMs ?? 1000);
@@ -246,7 +267,7 @@ export class JobWorker {
     const ledger = new FindingLedger();
     try {
       const { report, runDir } = await runSuite({
-        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha },
+        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha, ...(this.orch.deps.visualReviewer ? { reviewer: this.orch.deps.visualReviewer } : {}) },
         scenarios: suite.scenarios.filter((s) => cases.some((c) => c.scenario_id === s.id)),
         policy: suite.policy,
         baseUrl: url,
@@ -261,9 +282,10 @@ export class JobWorker {
         retries: cfg.suite.retries,
         concurrency: cfg.suite.concurrency,
         signal: ac.signal,
+        intents,
         ...(readOnly ? { readOnly: true } : {}),
         ...(cfg.suite.signed_out_path ? { signedOutPath: cfg.suite.signed_out_path } : {}),
-        ...(advisory && this.o.exploration ? { exploration: { ...this.o.exploration, s1: this.orch.deps.s1For?.(run.tenant_id, this.o.exploration.s1) ?? this.o.exploration.s1 } } : {}),
+        ...(advisory && this.o.exploration ? { exploration: { ...this.o.exploration, s1: this.orch.deps.s1For?.(run.tenant_id, this.o.exploration.s1) ?? this.o.exploration.s1, gate: await this.qualifiedGate(project.id, run.environment, suite.policy.contract_version) } } : {}),
         hooks: {
           fixtureProvisioned: async (fixtureId) => {
             await this.db.query(`insert into cleanup_tasks(tenant_id, project_id, run_id, fixture_id, fixture_api_url) values ($1,$2,$3,$4,$5) on conflict (fixture_id) do nothing`, [run.tenant_id, project.id, run.id, fixtureId, cfg.fixture_api.url ?? url]);
@@ -285,13 +307,13 @@ export class JobWorker {
 
     await this.db.tx(async (c) => {
       const cur = (await c.query<RunRow>('select * from runs where id=$1 for update', [run.id])).rows[0]!;
-      const owned = await c.query(`update jobs set state='done', updated_at=now() where id=$1 and lease_owner=$2 and state='leased'`, [job.id, this.id]);
-      if (owned.rowCount === 0) throw new Error('lease lost; results discarded (another worker owns this shard)');
+      const owned = await c.query(`update jobs set state='done', updated_at=now() where id=$1 and fence=$2 and state='leased'`, [job.id, job.fence]);
+      if (owned.rowCount === 0) throw new Error(`lease lost (fence ${job.fence}); results discarded (another worker owns this shard)`);
       if (cur.attempt === run.attempt) {
         for (const r of results) {
           await c.query(
-            `insert into case_results(run_id, attempt, shard, scenario_id, execution_profile, verdict, result, run_dir) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
-            [run.id, run.attempt, Number(job.payload.shard), r.scenario_id, r.execution_profile, r.verdict, JSON.stringify({ ...r, advisory }), runDirKey],
+            `insert into case_results(run_id, attempt, shard, scenario_id, execution_profile, verdict, result, run_dir, fence) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict do nothing`,
+            [run.id, run.attempt, Number(job.payload.shard), r.scenario_id, r.execution_profile, r.verdict, JSON.stringify({ ...r, advisory }), runDirKey, job.fence],
           );
         }
         for (const f of ledger.all()) {
@@ -310,10 +332,22 @@ export class JobWorker {
     });
   }
 
+  /** Calibrated autonomy only for a qualified profile; anything else is downgraded to shadow (decide, never act). */
+  private async qualifiedGate(projectId: string, environment: string, application: string): Promise<GateConfig | undefined> {
+    const gate = this.o.exploration?.gate;
+    if (!gate || autonomyMode(gate) !== 'calibrated') return gate;
+    const cal = gate.calibrated;
+    const q = cal && this.orch.deps.qualifications ? await this.orch.deps.qualifications.find({ project_id: projectId, environment, application, resolved_model: cal.model ?? '' }, { id: cal.version_id, decision_config_digest: cal.decision_config_digest }).catch(() => null) : null;
+    if (q) return gate;
+    this.log(`calibrated autonomy is not qualified for ${projectId}/${environment} (${application}); running exploration in shadow mode`);
+    return { ...gate, mode: 'shadow' };
+  }
+
   /** When no shard of this attempt is still pending, schedule exactly one aggregation. */
   private async settleShard(c: pg.PoolClient, runId: string, attempt: number): Promise<void> {
     await c.query('select id from runs where id=$1 for update', [runId]);
-    const pending = await c.query(`select 1 from jobs where run_id=$1 and kind='execute_shard' and (payload->>'attempt')::int=$2 and state in ('queued','leased') and not (state='leased' and lease_owner=$3)`, [runId, attempt, this.id]);
+    // Budget separation: advisory exploration never delays or blocks the required gate.
+    const pending = await c.query(`select 1 from jobs where run_id=$1 and kind='execute_shard' and (payload->>'attempt')::int=$2 and state in ('queued','leased') and coalesce((payload->>'advisory')::boolean, false) = false`, [runId, attempt]);
     if ((pending.rowCount ?? 0) > 0) return;
     const existing = await c.query(`select 1 from jobs where run_id=$1 and kind='aggregate' and (payload->>'attempt')::int=$2`, [runId, attempt]);
     if ((existing.rowCount ?? 0) > 0) return;
@@ -366,9 +400,20 @@ export class JobWorker {
         `select id::text, tenant_id, kind, payload, attempts from outbox_events where published_at is null and available_at <= now() order by id limit $1 for update skip locked`,
         [limit],
       )).rows;
+      const done = new Set<string>();
       for (const ev of events) {
+        if (done.has(ev.id)) continue;
         try {
           if (ev.kind !== 'publish_status') throw new Error(`unknown outbox kind ${ev.kind}`);
+          // One publisher per run at a time: the run state is read and published under the lock, so a
+          // slower publisher can never overwrite a newer status with an older one.
+          const locked = (await c.query<{ ok: boolean }>(`select pg_try_advisory_xact_lock(hashtext('outbox:' || $1)) ok`, [ev.payload.run_id])).rows[0]!.ok;
+          if (!locked) continue;
+          // Other events for this run in this (locked) batch were enqueued before the state read below,
+          // so publishing the current state satisfies them; later events stay queued.
+          const same = events.filter((x) => x.id !== ev.id && x.kind === ev.kind && x.payload.run_id === ev.payload.run_id).map((x) => x.id);
+          if (same.length) await c.query('update outbox_events set published_at=now(), attempts=attempts+1 where id = any($1::bigint[])', [same]);
+          for (const id of same) done.add(id);
           const run = (await c.query<RunRow>('select * from runs where id=$1', [ev.payload.run_id])).rows[0]!;
           const project = (await this.orch.projectById(run.project_id))!;
           const dep = (await c.query<{ provider: string; provider_deployment_id: string }>('select provider, provider_deployment_id from deployments where id=$1', [run.deployment_id])).rows[0];

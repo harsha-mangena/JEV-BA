@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ContractError } from '@qa/contracts';
 import { verifyGithubSignature } from '@qa/integrations';
-import { ApiError, type Orchestrator, type Principal } from '@qa/orchestrator';
+import { ApiError, metricsText, type Orchestrator, type Principal } from '@qa/orchestrator';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -69,6 +69,15 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
   };
 
   app.get('/healthz', async () => ({ ok: true }));
+  // Prometheus scrape endpoint; disabled unless QA_METRICS_TOKEN is configured.
+  app.get('/metrics', async (req, reply) => {
+    const token = env.QA_METRICS_TOKEN;
+    if (!token) return reply.code(404).send({ error: 'not_found' });
+    const given = Buffer.from(req.headers.authorization ?? '');
+    const want = Buffer.from(`Bearer ${token}`);
+    if (given.length !== want.length || !timingSafeEqual(given, want)) return reply.code(401).send({ error: 'unauthenticated' });
+    return reply.type('text/plain; version=0.0.4').send(await metricsText(orch.db));
+  });
 
   app.post('/v1/deployment-events', async (req, reply) => {
     const p = await auth(req);
@@ -149,6 +158,12 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
     const q = z.object({ project_id: z.string(), environment: z.string(), deployment_id: z.string(), commit_sha: z.string() }).parse(req.query);
     return orch.gateStatus(await auth(req), q);
   });
+
+  app.post('/v1/promotions', async (req, reply) => {
+    const q = z.object({ project_id: z.string(), environment: z.string(), deployment_id: z.string(), commit_sha: z.string(), ttl_seconds: z.number().int().positive().optional() }).strict().parse(req.body ?? {});
+    return reply.code(201).send(await orch.decidePromotion(await auth(req), q));
+  });
+  app.post<{ Params: { id: string } }>('/v1/promotions/:id/consume', async (req) => orch.consumePromotion(await auth(req), req.params.id));
 
   await opts.extend?.(app, orch);
   return app;

@@ -9,6 +9,7 @@ export interface User {
   role: Role;
   fixture_id: string | null;
   preferences: { theme: 'light' | 'dark' };
+  profile: { nickname: string; email_offers: boolean };
 }
 
 export interface Product {
@@ -30,6 +31,7 @@ export interface Order {
   total_minor_units: number;
   delivery_address: string;
   created_at: string;
+  idempotency_key: string | null;
 }
 
 export interface Note {
@@ -53,6 +55,8 @@ export class Store {
   readonly carts = new Map<string, CartLine[]>();
   readonly orders = new Map<string, Order>();
   readonly notes = new Map<string, Note>();
+  /** Every state-changing application request that reached a handler (test oracle: backend effect count). */
+  readonly writes: Array<{ method: string; path: string; user_id: string | null; idempotency_key: string | null; at: string }> = [];
 
   createUser(role: Role, fixture_id: string | null): User {
     const id = `u_${randomUUID().slice(0, 8)}`;
@@ -63,6 +67,7 @@ export class Store {
       role,
       fixture_id,
       preferences: { theme: 'light' },
+      profile: { nickname: '', email_offers: false },
     };
     this.users.set(id, user);
     this.carts.set(id, []);

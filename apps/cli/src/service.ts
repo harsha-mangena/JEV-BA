@@ -1,11 +1,12 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { buildApi } from '@qa/api';
 import { Db } from '@qa/db';
-import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
+import { bootstrapProject, checkStartup, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
 import { CalibrationRegistry, withCalibration } from '@qa/calibration';
-import { HEURISTIC_GATE_V0 } from '@qa/gate';
-import { HttpS1Provider, probeRequest, TypeSafeProvider, validateResponse, type SystemOneProvider } from '@qa/s1';
+import { HEURISTIC_GATE_V0, type AutonomyMode } from '@qa/gate';
+import { AnthropicVisionS2Provider } from '@qa/s2';
+import { HttpS1Provider, probeProvider, TYPESAFE_CONTRACT, TypeSafeProvider, type SystemOneProvider } from '@qa/s1';
 
 export interface ServiceArgs {
   [k: string]: string | string[] | boolean | undefined;
@@ -62,10 +63,43 @@ export async function bootstrap(a: ServiceArgs): Promise<number> {
   }
 }
 
+/** Run the startup checks for a role; print them and return whether the process may start. */
+async function startupGate(role: 'api' | 'worker', db: Db, orch: Orchestrator): Promise<boolean> {
+  const s1 = role === 'worker' ? s1FromEnv() : null;
+  const checks = await checkStartup(db, orch, {
+    role,
+    env: process.env,
+    ...(role === 'worker' ? { launchBrowser: async () => (await import('@qa/browser')).launchBrowser() } : {}),
+    ...(s1 ? { probeS1: async () => {
+      const r = await probeProvider(s1.provider, s1.endpoint, s1.model);
+      return { ok: r.ok, detail: r.ok ? `resolved ${r.resolved_model}` : r.error ?? JSON.stringify(r.invalid_heads) };
+    } } : {}),
+  });
+  for (const c of checks) console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.name}: ${c.detail}`);
+  return checks.every((c) => c.ok);
+}
+
+/** Validate configuration for a role without starting it (`qa doctor --role api|worker`). */
+export async function doctor(a: ServiceArgs): Promise<number> {
+  const role = (a.role as string) ?? 'worker';
+  if (role !== 'api' && role !== 'worker') throw new UsageError('--role must be api or worker');
+  const db = dbFromEnv();
+  try {
+    return (await startupGate(role, db, new Orchestrator(depsFromEnv(db)))) ? 0 : 1;
+  } finally {
+    await db.close();
+  }
+}
+
 export async function serveApi(a: ServiceArgs): Promise<number> {
   const db = dbFromEnv();
   await db.migrate();
   const orch = new Orchestrator(depsFromEnv(db));
+  if (!(await startupGate('api', db, orch))) {
+    await db.close();
+    console.error('refusing to start: fix the failing checks above');
+    return 1;
+  }
   const { registerServiceRoutes } = await import('@qa/api');
   const app = await buildApi(orch, { logger: true, extend: registerServiceRoutes });
   await app.listen({ port: Number(a.port ?? process.env.PORT ?? 8080), host: (a.host as string) ?? '0.0.0.0' });
@@ -78,8 +112,13 @@ export async function serveApi(a: ServiceArgs): Promise<number> {
 export async function serveWorker(a: ServiceArgs): Promise<number> {
   const db = dbFromEnv();
   const orch = new Orchestrator(depsFromEnv(db));
+  if (!(await startupGate('worker', db, orch))) {
+    await db.close();
+    console.error('refusing to start: fix the failing checks above');
+    return 1;
+  }
   const exploration = await explorationFromEnv();
-  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m), ...(exploration ? { exploration } : {}) });
+  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m), ...(process.env.QA_LEASE_SECONDS ? { leaseSeconds: Number(process.env.QA_LEASE_SECONDS) } : {}), ...(process.env.QA_SWEEP_INTERVAL_MS ? { sweepIntervalMs: Number(process.env.QA_SWEEP_INTERVAL_MS) } : {}), ...(exploration ? { exploration } : {}) });
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => worker.stop());
   await worker.run();
   await db.close();
@@ -162,14 +201,51 @@ export async function wait(a: ServiceArgs): Promise<number> {
   }
 }
 
-/** S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_ENDPOINT, QA_S1_API_KEY, QA_S1_MODEL. */
-export function s1FromEnv(): { provider: SystemOneProvider; model: string } | null {
+/**
+ * Decide and consume a single-use promotion for one candidate. Exit 0 only
+ * when the decision was eligible and still held at consumption.
+ */
+export async function promote(a: ServiceArgs): Promise<number> {
+  const base = need(a['api-url'] as string, '--api-url').replace(/\/$/, '');
+  const body = { project_id: need(a.project as string, '--project'), environment: need(a.environment as string, '--environment'), deployment_id: need(a['deployment-id'] as string, '--deployment-id'), commit_sha: need(a['commit-sha'] as string, '--commit-sha') };
+  const d = await api('POST', `${base}/v1/promotions`, body);
+  if (d.status !== 201) {
+    console.error(`promotion decision failed (${d.status}): ${JSON.stringify(d.json)}`);
+    return 2;
+  }
+  console.log(`decision ${d.json.decision_id as string}: ${d.json.eligible ? 'eligible' : 'held'}`);
+  for (const r of (d.json.reasons as string[]) ?? []) console.log(`  - ${r}`);
+  if (!d.json.eligible) return 1;
+  const c = await api('POST', `${base}/v1/promotions/${encodeURIComponent(d.json.decision_id as string)}/consume`, {});
+  if (c.status !== 200) {
+    console.error(`consume failed (${c.status}): ${JSON.stringify(c.json)}`);
+    return 2;
+  }
+  console.log(c.json.promoted ? 'promoted' : 'refused at consumption');
+  for (const r of (c.json.reasons as string[]) ?? []) console.log(`  - ${r}`);
+  return c.json.promoted ? 0 : 1;
+}
+
+/**
+ * S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_API_KEY,
+ * QA_S1_MODEL (typesafe default jev-latest), QA_S1_ENDPOINT (typesafe default
+ * is the official endpoint), QA_S1_TIMEOUT_MS, QA_S1_RETRIES.
+ */
+export function s1FromEnv(): { provider: SystemOneProvider; model: string; endpoint: string } | null {
   const kind = process.env.QA_S1_PROVIDER;
   if (!kind) return null;
-  const endpoint = need(process.env.QA_S1_ENDPOINT, 'QA_S1_ENDPOINT');
-  const model = need(process.env.QA_S1_MODEL, 'QA_S1_MODEL');
-  if (kind === 'typesafe') return { provider: new TypeSafeProvider({ endpoint, apiKey: need(process.env.QA_S1_API_KEY, 'QA_S1_API_KEY') }), model };
-  if (kind === 'http') return { provider: new HttpS1Provider('http', { endpoint, ...(process.env.QA_S1_API_KEY ? { apiKey: process.env.QA_S1_API_KEY } : {}) }), model };
+  const transport = {
+    ...(process.env.QA_S1_TIMEOUT_MS ? { timeoutMs: Number(process.env.QA_S1_TIMEOUT_MS) } : {}),
+    ...(process.env.QA_S1_RETRIES ? { retries: Number(process.env.QA_S1_RETRIES) } : {}),
+  };
+  if (kind === 'typesafe') {
+    const endpoint = process.env.QA_S1_ENDPOINT ?? TYPESAFE_CONTRACT.endpoint;
+    return { provider: new TypeSafeProvider({ endpoint, apiKey: need(process.env.QA_S1_API_KEY, 'QA_S1_API_KEY'), ...transport }), model: process.env.QA_S1_MODEL ?? TYPESAFE_CONTRACT.default_model, endpoint };
+  }
+  if (kind === 'http') {
+    const endpoint = need(process.env.QA_S1_ENDPOINT, 'QA_S1_ENDPOINT');
+    return { provider: new HttpS1Provider('http', { endpoint, ...(process.env.QA_S1_API_KEY ? { apiKey: process.env.QA_S1_API_KEY } : {}), ...transport }), model: need(process.env.QA_S1_MODEL, 'QA_S1_MODEL'), endpoint };
+  }
   throw new UsageError(`unknown QA_S1_PROVIDER ${kind}`);
 }
 
@@ -177,20 +253,29 @@ async function explorationFromEnv() {
   const s1 = s1FromEnv();
   if (!s1) return null;
   const cal = process.env.QA_CALIBRATION_DIR ? await new CalibrationRegistry(process.env.QA_CALIBRATION_DIR).current() : null;
-  return { s1: s1.provider, model: s1.model, gate: withCalibration(HEURISTIC_GATE_V0, cal) };
+  // Autonomy is opt-in: the service records decisions in shadow mode unless a mode is chosen explicitly.
+  const mode = (process.env.QA_AUTONOMY_MODE ?? 'shadow') as AutonomyMode;
+  if (!['shadow', 'heuristic_staging', 'calibrated'].includes(mode)) throw new UsageError(`QA_AUTONOMY_MODE must be shadow, heuristic_staging or calibrated (got ${mode})`);
+  if (mode === 'calibrated' && !cal) throw new UsageError('QA_AUTONOMY_MODE=calibrated needs QA_CALIBRATION_DIR with a current calibration');
+  // System Two: QA_S2_PROVIDER=anthropic (credentials resolved by the Anthropic SDK), QA_S2_MODEL optional.
+  const s2 = process.env.QA_S2_PROVIDER === 'anthropic' ? new AnthropicVisionS2Provider(process.env.QA_S2_MODEL ? { model: process.env.QA_S2_MODEL } : {}) : undefined;
+  if (process.env.QA_S2_PROVIDER && !s2) throw new UsageError(`unknown QA_S2_PROVIDER ${process.env.QA_S2_PROVIDER}`);
+  return { s1: s1.provider, model: s1.model, gate: withCalibration({ ...HEURISTIC_GATE_V0, mode }, mode === 'calibrated' ? cal : null), ...(s2 ? { s2 } : {}) };
 }
 
-/** Send a tiny request and validate the response strictly — run before enabling autonomy. */
+/**
+ * Send a tiny request and validate the response strictly — run before enabling
+ * autonomy. Writes a compatibility record (QA_S1_COMPAT_RECORD, if set) and
+ * exits non-zero unless every head validates.
+ */
 export async function s1Probe(): Promise<number> {
   const s1 = s1FromEnv();
-  if (!s1) throw new UsageError('set QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL (and QA_S1_API_KEY)');
-  const req = probeRequest(s1.model);
-  const started = Date.now();
-  const raw = await s1.provider.ask(req);
-  const v = validateResponse(req, raw);
-  console.log(JSON.stringify({ provider: s1.provider.id, resolved_model: v.resolvedModel, elapsed_ms: Date.now() - started, valid_heads: Object.keys(v.answers), invalid_heads: v.invalid, op: v.answers.op?.distribution ?? null }, null, 2));
-  if (Object.keys(v.invalid).length) {
-    console.error('Contract mismatch: fix the adapter mapping before enabling autonomy.');
+  if (!s1) throw new UsageError('set QA_S1_PROVIDER and QA_S1_API_KEY (and QA_S1_MODEL/QA_S1_ENDPOINT for http)');
+  const rec = await probeProvider(s1.provider, s1.endpoint, s1.model);
+  console.log(JSON.stringify(rec, null, 2));
+  if (process.env.QA_S1_COMPAT_RECORD) await writeFile(process.env.QA_S1_COMPAT_RECORD, `${JSON.stringify(rec, null, 2)}\n`);
+  if (!rec.ok) {
+    console.error(rec.error ? `Provider unreachable: ${rec.error}` : 'Contract mismatch: fix the adapter mapping before enabling autonomy.');
     return 1;
   }
   return 0;

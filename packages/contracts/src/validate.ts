@@ -97,6 +97,13 @@ export function validateScenarioSemantics(s: Scenario, catalog: FixtureCatalog, 
       const p = `${base}.steps.${si}`;
       if (st.op === 'type') checkRef(`${p}.value_ref`, st.value_ref, true);
       if (st.op === 'select') checkRef(`${p}.option_ref`, st.option_ref, false);
+      const known = Object.keys(policy.intents).length > 0;
+      if (st.intent && known && !policy.intents[st.intent]) issues.push({ path: `${p}.intent`, message: `intent ${st.intent} is not registered in the application contract` });
+      if (!st.intent && known && 'target' in st && 'role' in st.target) {
+        const t = st.target;
+        const mutating = policy.control_bindings.filter((b) => b.role === t.role && (b.name !== undefined ? b.name === t.name : new RegExp(`^(?:${b.name_pattern})$`).test(t.name)) && b.intent && policy.intents[b.intent]?.kind === 'mutation');
+        if (mutating.length > 0) issues.push({ path: `${p}.intent`, message: `${t.role} "${t.name}" is bound to mutation intent ${mutating.map((b) => b.intent).join('/')}; the step must declare it` });
+      }
       if (st.intent) {
         const bound = Object.entries(policy.mutations).filter(([, b]) => b.action_intents.includes(st.intent!));
         if (bound.length > 0 && !bound.some(([name]) => s.policy.mutations.includes(name))) {

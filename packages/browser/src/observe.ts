@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { ElementHandle, Page } from '@playwright/test';
 import type { Observation, ObservedElement } from '@qa/contracts';
 import { ensureEvalShim } from './shim.ts';
+import { installIdentify } from './identify.ts';
 
 /** Bumped whenever extraction semantics change; part of the pinned decision configuration. */
-export const OBSERVATION_EXTRACTOR_VERSION = 'observe-v1';
+export const OBSERVATION_EXTRACTOR_VERSION = 'observe-v2';
 
 /** Stays below the 255-option provider limit with room for NONE / NEED_MORE_CONTEXT. */
 export const DEFAULT_MAX_CANDIDATES = 200;
@@ -85,13 +86,17 @@ function extractInPage(maxText: number): RawExtraction {
 
   let shadowRoots = 0;
   const all: Element[] = [];
-  const collect = (root: Document | ShadowRoot) => {
+  // Open shadow roots are traversed (closed roots are invisible to page script by design).
+  const collect = (root: Document | ShadowRoot, depth: number) => {
     root.querySelectorAll(SELECTOR).forEach((e) => all.push(e));
     root.querySelectorAll('*').forEach((e) => {
-      if (e.shadowRoot) shadowRoots++;
+      if (e.shadowRoot && depth < 8) {
+        shadowRoots++;
+        collect(e.shadowRoot, depth + 1);
+      }
     });
   };
-  collect(document);
+  collect(document, 0);
 
   const elements: RawExtraction['elements'] = [];
   for (const el of all) {
@@ -106,8 +111,9 @@ function extractInPage(maxText: number): RawExtraction {
       const style = getComputedStyle(el);
       const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.closest('[hidden],dialog:not([open])');
       const disabled = (el as HTMLButtonElement).disabled === true || el.getAttribute('aria-disabled') === 'true' || !!el.closest('fieldset[disabled]');
-      const role = implicitRole(el);
-      const tag = el.tagName.toLowerCase();
+      const ident = (window as unknown as { __qaIdentify(e: Element): { role: string; name: string; form?: string; section?: string; tag: string } }).__qaIdentify(el);
+      const role = ident.role;
+      const tag = ident.tag;
       const editable = !disabled && ((tag === 'input' && role === 'textbox' && !(el as HTMLInputElement).readOnly) || (tag === 'textarea' && !(el as HTMLTextAreaElement).readOnly) || (el as HTMLElement).isContentEditable);
       const ops: ObservedElement['supported_operations'] = [];
       if (visible && !disabled) {
@@ -120,7 +126,7 @@ function extractInPage(maxText: number): RawExtraction {
       const item: RawExtraction['elements'][number] = {
         node_id: id,
         role,
-        name: accessibleName(el),
+        name: ident.name,
         tag,
         visible,
         enabled: !disabled,
@@ -132,10 +138,8 @@ function extractInPage(maxText: number): RawExtraction {
       };
       if (el instanceof HTMLInputElement) item.input_type = el.type;
       if (value !== undefined) item.value = value;
-      const section = context(el, 'section,dialog[open],[role=dialog],[role=region],nav,aside,fieldset');
-      if (section) item.section = section;
-      const formName = context(el, 'form');
-      if (formName) item.form = formName;
+      if (ident.section) item.section = ident.section;
+      if (ident.form) item.form = ident.form;
       if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) item.checked = el.checked;
       const expanded = el.getAttribute('aria-expanded');
       if (expanded !== null) item.expanded = expanded === 'true';
@@ -178,6 +182,7 @@ export interface ObserveOptions {
 export async function observe(page: Page, o: ObserveOptions): Promise<Observation> {
   await page.waitForLoadState('load');
   await ensureEvalShim(page);
+  await installIdentify(page);
   const raw = await page.evaluate(extractInPage, o.maxText ?? 120);
   const max = o.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
   const actionable = raw.elements.filter((e) => e.actionable);
@@ -204,7 +209,8 @@ export async function observe(page: Page, o: ObserveOptions): Promise<Observatio
       candidates_included: kept.size,
       truncated: kept.size < actionable.length,
       unsupported_frames: raw.frames,
-      shadow_roots_skipped: raw.shadow_roots,
+      shadow_roots_skipped: 0,
+      shadow_roots_traversed: raw.shadow_roots,
       extraction_errors: raw.errors,
     },
   };

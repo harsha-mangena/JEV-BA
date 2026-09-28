@@ -1,0 +1,21 @@
+# Selection-recall benchmark for fixture-shop. Each case names a seeded defect,
+# a change that would plausibly introduce it (paths in the coverage graph's
+# namespace) and the approved scenarios proven to detect it (tests/e2e).
+# Recall = cases whose selection includes at least one detecting scenario.
+# This measures the fixture mapping only; each target application needs its
+# own benchmark before selective runs may gate it (phase 11 qualification).
+schema_version: 1
+cases:
+  - { defect: checkout_double_submit, changed: [src/checkout/submit.ts], detected_by: [checkout_existing_customer] }
+  - { defect: total_off_by_one, changed: [src/pricing/total.ts], detected_by: [checkout_existing_customer] }
+  - { defect: validation_bypass, changed: [src/checkout/validate.ts], detected_by: [checkout_rejects_empty_address] }
+  - { defect: confirmation_missing, changed: [src/checkout/confirm.ts], detected_by: [checkout_existing_customer] }
+  - { defect: note_delete_ignored, changed: [src/notes/delete.ts], detected_by: [notes_crud] }
+  - { defect: role_escalation, changed: [src/notes/permissions.ts], detected_by: [viewer_cannot_create_notes] }
+  - { defect: preference_not_persisted, changed: [src/settings/save.ts], detected_by: [settings_preference_persists] }
+  - { defect: cart_console_error, changed: [src/cart/view.ts], detected_by: [checkout_existing_customer, cart_quality] }
+  - { defect: checkout_button_disabled, changed: [src/cart/view.ts], detected_by: [checkout_existing_customer] }
+  - { defect: mobile_horizontal_overflow, changed: [src/styles/cart.css], detected_by: [cart_quality] }
+  - { defect: focus_outline_removed, changed: [src/styles/global.css], detected_by: [keyboard_checkout] }
+  - { defect: header_restyled, changed: [src/layout/header.ts], detected_by: [cart_quality] }
+  - { defect: address_label_missing, changed: [src/checkout/form.ts], detected_by: [cart_quality] }

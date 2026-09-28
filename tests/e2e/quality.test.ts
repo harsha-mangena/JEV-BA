@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { launchBrowser, observe } from '@qa/browser';
 import type { CaseResult } from '@qa/contracts';
 import type { DefectId } from '@qa/fixture-test-app';
-import { approveFromEvidence, FindingLedger, FsBaselineStore, uxHypotheses, uxMetrics, type BaselineKey } from '@qa/quality';
+import { approveFromEvidence, BaselineConflict, FindingLedger, FsBaselineStore, uxHypotheses, uxMetrics, type BaselineKey } from '@qa/quality';
 import { runSuite } from '@qa/worker';
 import { app, outDir, policy, scenario } from './helpers.ts';
 
@@ -48,7 +48,7 @@ async function approveAll(store: FsBaselineStore, runDir: string, cases: CaseRes
     for (const a of c.assertions.filter((x) => x.type === 'visual_match' && x.status === 'needs_review')) {
       const key = (a.expected as { key: BaselineKey }).key;
       const [, path, sha] = /artifact: (\S+)#sha256=([0-9a-f]{64})/.exec(a.message!)!;
-      await approveFromEvidence(store, key, join(runDir, path!), sha!, { approved_by: 'reviewer@example.test', commit_sha: SHA, source: 'test' });
+      await approveFromEvidence(store, key, join(runDir, path!), sha!, { approved_by: 'reviewer@example.test', commit_sha: SHA, source: 'test', expected_version: (a.expected as { baseline_version?: number }).baseline_version ?? 0 });
     }
   }
 }
@@ -92,9 +92,15 @@ describe('visual baselines', () => {
     const key = (a.expected as { key: BaselineKey }).key;
     const [, path, sha] = /artifact: (\S+)#sha256=([0-9a-f]{64})/.exec(a.message!)!;
     const png = await readFile(join(first.runDir, path!));
-    await expect(store.approve(key, png, { approved_by: 'x', commit_sha: 'main', source: 't', expected_sha256: sha! })).rejects.toThrow(/commit SHA/);
-    await expect(store.approve(key, png, { approved_by: 'x', commit_sha: SHA, source: 't', expected_sha256: 'f'.repeat(64) })).rejects.toThrow(/checksum/);
-    await expect(store.approve(key, png, { approved_by: ' ', commit_sha: SHA, source: 't', expected_sha256: sha! })).rejects.toThrow(/approver/);
+    await expect(store.approve(key, png, { approved_by: 'x', commit_sha: 'main', source: 't', expected_sha256: sha!, expected_version: 0 })).rejects.toThrow(/commit SHA/);
+    await expect(store.approve(key, png, { approved_by: 'x', commit_sha: SHA, source: 't', expected_sha256: 'f'.repeat(64), expected_version: 0 })).rejects.toThrow(/checksum/);
+    await expect(store.approve(key, png, { approved_by: ' ', commit_sha: SHA, source: 't', expected_sha256: sha!, expected_version: 0 })).rejects.toThrow(/approver/);
+    // Compare-and-set: two reviewers approving against the same baseline version — only the first wins.
+    const first1 = await Promise.allSettled([0, 1].map(() => store.approve(key, png, { approved_by: 'r1', commit_sha: SHA, source: 't', expected_sha256: sha!, expected_version: 0 })));
+    expect(first1.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(first1.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason)).toEqual([expect.any(BaselineConflict)]);
+    await expect(store.approve(key, png, { approved_by: 'r2', commit_sha: SHA, source: 't', expected_sha256: sha!, expected_version: 0 })).rejects.toBeInstanceOf(BaselineConflict);
+    expect((await store.approve(key, png, { approved_by: 'r2', commit_sha: SHA, source: 't', expected_sha256: sha!, expected_version: 1 })).version).toBe(2);
   });
 
   it('an unapproved visual change fails with a diff, and repeated occurrences do not multiply findings', async () => {

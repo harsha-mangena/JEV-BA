@@ -12,30 +12,22 @@ to the tests that demonstrate it.
 
 ## Status
 
-| Phase | Scope | State |
-| --- | --- | --- |
-| 0 | Contracts, fixture app with seeded defects, specs, decision records | Done |
-| 1 | Deterministic Playwright runner, independent verdicts, evidence, reports, CLI | Done |
-| 2 | Observation model, node registry, S1 adapter, response validation | Done — live TypeSafe wire format unverified (see below) |
-| 3 | Policy-first gate, S2 escalation, bounded autonomy | Done |
-| 4 | Deployment-triggered orchestration (Postgres, jobs, outbox, GitHub, exact-SHA checks) | Done |
-| 5 | Visual baselines, layout geometry, axe, keyboard, UX hypotheses | Done |
-| 6 | Change impact selection, coverage learning, validated test proposals | Done |
-| 7 | Regression compilation, Playwright export, controlled repairs | Done |
-| 8 | Calibration, held-out evaluation, drift canaries, comparative experiments | Done — needs real labeled data |
-| 9 | Onboarding, roles, quotas, fair scheduling, sweepers, S3, dashboard, Vercel, read-only production | Done |
+Readiness is tracked per requirement/finding in [`docs/acceptance-inventory.json`](docs/acceptance-inventory.json)
+using the states `IMPLEMENTATION_PENDING`, `IMPLEMENTED_OFFLINE_VERIFIED`,
+`LIVE_VERIFICATION_REQUIRED`, `QUALIFIED_FOR_PROFILE` and `BLOCKED`. An
+independent audit (`docs/evidence/audit-2026-09-27/`) found gaps F01–F10 in the
+first implementation; its 13 probes run as the mandatory `audit` lane
+(`tests/audit/`) and now pass. The closure report is
+[`docs/closure-report.md`](docs/closure-report.md).
 
-**Honest limits.**
-- The **TypeSafe/Jev wire format is unverified**: its API reference was not
-  reachable from the build environment, so `TypeSafeProvider` is built from
-  public descriptions and flagged `WIRE_FORMAT_VERIFIED = false`. Run
-  `qa s1 probe` / `npm run test:live` against the real endpoint before enabling
-  autonomy; mismatches surface as invalid heads (abstain), never as actions.
-- **No calibration ships.** The gate runs `heuristic-v0` until you label real
-  decisions and run `qa calibrate` (see [`evals/README.md`](evals/README.md)).
-- **Vercel** endpoints follow Vercel's public docs but were exercised only
-  against a local double. Firefox/WebKit profiles exist but only Chromium is
-  installed in this environment; missing browsers are reported as `BLOCKED`.
+| Item | State |
+| --- | --- |
+| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency | `IMPLEMENTED_OFFLINE_VERIFIED` |
+| F01 TypeSafe/Jev contract, F07 vision S2 | `LIVE_VERIFICATION_REQUIRED` (provider credentials) |
+| Calibrated autonomy for any profile | `BLOCKED` (no representative labelled data or live record; workers run calibrated exploration in shadow mode) |
+
+Nothing is described as complete unless its lane evidence supports it; mocked
+or skipped tests are never counted as live verification.
 
 ## Quick start (local)
 
@@ -63,6 +55,10 @@ npm run qa -- bootstrap --tenant acme --project shop --config project.yaml --tok
 npm run qa -- serve-api --port 8080     # API, webhooks, /dashboard
 npm run qa -- serve-worker              # jobs, outbox, sweepers
 ```
+
+Containers: `docker build -t jev-ba/qa:local .` and `docker-compose.yml`; roles,
+migrations, configuration keys and the unattended demo flow are in
+[`deploy/README.md`](deploy/README.md).
 
 Deployments arrive via `POST /v1/deployment-events`, `POST /v1/webhooks/github`
 or `POST /v1/webhooks/vercel/:project`; results are published as the required

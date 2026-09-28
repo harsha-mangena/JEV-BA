@@ -1,0 +1,54 @@
+{
+  "run_id": "run_ApxkxZZcTKKL",
+  "crashed_intent": {
+    "intent_id": "checkout_existing_customer.chromium_desktop.a1.99b47f.i2",
+    "state": "DISPATCHING",
+    "idempotency_key": "checkout_existing_customer.chromium_desktop.a1.99b47f.i2"
+  },
+  "intent_after_recovery": {
+    "state": "RECONCILED",
+    "detail": "effect confirmed: order ord_ea6a5400",
+    "fence": "1"
+  },
+  "transitions": [
+    {
+      "from_state": null,
+      "to_state": "PREPARED",
+      "fence": "1"
+    },
+    {
+      "from_state": "PREPARED",
+      "to_state": "DISPATCHING",
+      "fence": "1"
+    },
+    {
+      "from_state": "DISPATCHING",
+      "to_state": "RECONCILING",
+      "fence": "2"
+    },
+    {
+      "from_state": "RECONCILING",
+      "to_state": "RECONCILED",
+      "fence": "2"
+    }
+  ],
+  "receipts": [
+    {
+      "entity_id": "ord_ea6a5400",
+      "owner": "u_e706762c"
+    }
+  ],
+  "orders_for_intent": 1,
+  "checkout_requests": 2,
+  "run_state": "COMPLETED",
+  "gate": {
+    "reasons": [],
+    "eligible": true
+  },
+  "swept": 1,
+  "child_log_tail": [
+    "ready",
+    "[crash-worker] execute_shard run_ApxkxZZcTKKL (attempt 1)",
+    ""
+  ]
+}

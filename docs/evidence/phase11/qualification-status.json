@@ -1,0 +1,19 @@
+{
+  "checked_at": "2026-09-28",
+  "qualified_profiles": [],
+  "state": "BLOCKED",
+  "reasons": [
+    "No representative labelled decisions from a target application exist; the only decisions available come from the offline fixture model (KeywordProvider), which qualify() rejects as 'fixture' data.",
+    "No live TypeSafe/Jev compatibility record exists (QA_S1_API_KEY not available in the build environment); qualify() would return LIVE_VERIFICATION_REQUIRED even with a representative dataset.",
+    "No end-to-end episodes have been run under a candidate calibration against a target application."
+  ],
+  "effect": "Workers run calibrated exploration in shadow mode for every profile (packages/orchestrator/src/worker.ts qualifiedGate); the service default autonomy mode is shadow.",
+  "to_qualify": [
+    "Run exploration in shadow mode on the target application and export decisions (qa evals extract).",
+    "Label complete actions with two independent annotators and adjudicate (agreement >= 0.9).",
+    "qa calibrate --labels ... --target 0.99; the held-out band must meet the target with enough accepted decisions.",
+    "qa s1 probe with credentials (QA_S1_COMPAT_RECORD) within 30 days; the resolved model must equal the calibrated one.",
+    "Run >= 50 end-to-end episodes with zero false passes and >= 90% verified success.",
+    "qa qualify --calibration <version.json> --evidence <evidence.json> --project --environment --application --qualifications <dir>."
+  ]
+}

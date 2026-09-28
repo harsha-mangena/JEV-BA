@@ -35,7 +35,10 @@ export const ObservationCoverage = z.object({
   candidates_included: z.number().int().nonnegative(),
   truncated: z.boolean(),
   unsupported_frames: z.number().int().nonnegative(),
+  /** Shadow roots whose content was not extracted (closed roots cannot be seen and are not counted). */
   shadow_roots_skipped: z.number().int().nonnegative(),
+  /** Open shadow roots whose controls were extracted. */
+  shadow_roots_traversed: z.number().int().nonnegative().optional(),
   extraction_errors: z.array(z.string()),
 });
 

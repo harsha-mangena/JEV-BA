@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import type { ArtifactRef, EvidenceEvent } from '@qa/contracts';
 import { Redactor } from './redact.ts';
+import { canaryHits, redactBytes, sanitizeTraceArchive } from './sanitize.ts';
 
 type Kind = EvidenceEvent['kind'];
 
@@ -48,12 +49,40 @@ export class EvidenceLog {
     return event;
   }
 
-  async writeArtifact(kind: ArtifactRef['kind'], name: string, bytes: Buffer | string): Promise<ArtifactRef> {
+  /**
+   * Write an artifact after removing every registered secret from it. An
+   * artifact in which a secret is still detectable is withheld, never written.
+   */
+  async writeArtifact(kind: ArtifactRef['kind'], name: string, bytes: Buffer | string): Promise<ArtifactRef | null> {
     const path = join(this.dir, name);
     await mkdir(dirname(path), { recursive: true });
-    const buf = typeof bytes === 'string' ? Buffer.from(bytes) : bytes;
+    const secrets = this.redactor.values();
+    const buf = redactBytes(typeof bytes === 'string' ? Buffer.from(bytes) : bytes, secrets);
+    if (canaryHits(buf, secrets) > 0) {
+      this.record('artifact', `${kind} ${name} withheld: secret still present after redaction`, { kind, name });
+      return null;
+    }
     await writeFile(path, buf);
     return this.registerArtifact(kind, path, buf);
+  }
+
+  /**
+   * Sanitize an archive written by a tool (a Playwright trace) in place, then
+   * register it. On any doubt — an unreadable archive or residual secrets —
+   * the file is deleted and the withholding is recorded.
+   */
+  async registerSanitizedArchive(kind: ArtifactRef['kind'], absPath: string): Promise<ArtifactRef | null> {
+    try {
+      const s = sanitizeTraceArchive(await readFile(absPath), this.redactor.values());
+      if (s.residualHits > 0) throw new Error(`${s.residualHits} secret(s) still present after sanitization`);
+      await writeFile(absPath, s.bytes);
+      this.record('artifact', `${kind} sanitized (${s.redactedEntries.length} of ${s.entries} entries redacted)`, { redacted_entries: s.redactedEntries });
+      return this.registerArtifact(kind, absPath, s.bytes);
+    } catch (e) {
+      await rm(absPath, { force: true });
+      this.record('artifact', `${kind} withheld: ${(e as Error).message}`, { path: relative(this.root, absPath) });
+      return null;
+    }
   }
 
   registerArtifact(kind: ArtifactRef['kind'], absPath: string, bytes: Buffer): ArtifactRef {

@@ -52,13 +52,16 @@ Calibration (Phase 8):
   evals extract            Export S1 decision records for labeling (--run <dir>... --app <id> --decision-config <file> [--labels out]).
   calibrate                Fit, select threshold, evaluate on grouped splits (--labels <jsonl> --target 0.99 [--registry dir]).
   evals canary             Check a candidate configuration's labeled replay against the current calibration (--labels).
+  qualify                  Qualify a calibration for one profile (--calibration <version.json> --evidence <json>
+                           --project --environment --application --qualifications <dir>); exit 0 only if qualified.
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
   bootstrap                Create/update a tenant and project; mint tokens (--tenant --project --config
                            [--repository-id --repository --webhook-secret-env --installation-id] [--token role:label]...)
   serve-api                Run the control API (--port).
-  serve-worker             Run a job worker (--out).
+  serve-worker             Run a job worker (--out). Both servers refuse to start when a startup check fails.
+  doctor                   Run the startup checks for --role api|worker and exit non-zero on any failure.
 
 System One:
   s1 probe                 Validate the live provider contract (QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL, QA_S1_API_KEY).
@@ -67,6 +70,8 @@ Client commands (need QA_API_TOKEN):
   submit                   Submit a deployment candidate (--api-url, then --github-event <file> or
                            --deployment-id --environment --commit-sha --candidate-url [--provider --project]).
   wait                     Wait for a run (--api-url --run-id [--timeout s]); exit 0 only if the gate is eligible.
+  promote                  Decide and consume a single-use promotion (--api-url --project --environment
+                           --deployment-id --commit-sha); exit 0 only if promoted.
 
 Common options:
   --specs <dir>            Specs directory (default: ./specs)
@@ -134,6 +139,11 @@ const { positionals, values } = parseArgs({
     provider: { type: 'string' },
     'candidate-url': { type: 'string' },
     'run-id': { type: 'string' },
+    role: { type: 'string' },
+    calibration: { type: 'string' },
+    evidence: { type: 'string' },
+    application: { type: 'string' },
+    qualifications: { type: 'string' },
     timeout: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -258,6 +268,8 @@ async function main(): Promise<number> {
       return evalsCmd.evals(positionals[1], values);
     case 'calibrate':
       return evalsCmd.calibrateCmd(values);
+    case 'qualify':
+      return evalsCmd.qualifyCmd(values);
     case 's1':
       if (positionals[1] === 'probe') return svc.s1Probe();
       fail('usage: qa s1 probe');
@@ -265,6 +277,8 @@ async function main(): Promise<number> {
       return svc.migrate();
     case 'bootstrap':
       return svc.bootstrap(values);
+    case 'doctor':
+      return svc.doctor(values);
     case 'serve-api':
       return svc.serveApi(values);
     case 'serve-worker':
@@ -273,6 +287,8 @@ async function main(): Promise<number> {
       return svc.submit(values);
     case 'wait':
       return svc.wait(values);
+    case 'promote':
+      return svc.promote(values);
     default:
       fail(`unknown command ${cmd}\n\n${USAGE}`);
   }

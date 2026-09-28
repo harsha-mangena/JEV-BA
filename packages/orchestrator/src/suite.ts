@@ -13,12 +13,36 @@ import {
   type SelectionManifest,
 } from '@qa/contracts';
 
+/**
+ * Version of the execution semantics (runner, oracles, authorization, observation).
+ * Bump when a change could alter a verdict for unchanged specs; it is part of the
+ * execution snapshot, so results produced by an older engine stop qualifying.
+ */
+export const EXECUTION_ENGINE_VERSION = 'engine-2026.09-c7';
+
+/** Everything that decides what a run must prove, beyond the spec files themselves. */
+export interface ExecutionSnapshot {
+  engine: string;
+  specs_digest: string;
+  contract_version: string;
+  required_profiles: string[] | 'scenario-declared';
+  scenario_filter: string[] | 'all';
+  retries: number;
+  signed_out_path: string | null;
+  coverage_file: boolean;
+}
+
 export interface LoadedSuite {
   scenarios: Scenario[];
   policy: ProjectPolicy;
   catalog: FixtureCatalog;
-  /** Content hash of every file that defines expected behaviour; a change invalidates earlier results. */
+  /**
+   * Digest of the execution snapshot: every spec/policy/catalog file plus the
+   * effective execution configuration (required profiles, scenario filter,
+   * retries, engine version). Any change invalidates earlier results (audit F05).
+   */
   revision: string;
+  snapshot: ExecutionSnapshot;
   root: string;
 }
 
@@ -46,7 +70,22 @@ export async function loadSuite(cfg: ProjectConfig, baseDir: string): Promise<Lo
     }
   }
   if (cfg.suite.coverage_file) await read(at(cfg.suite.coverage_file));
-  return { scenarios, policy, catalog, revision: `suite_${hash.digest('hex').slice(0, 16)}`, root: at(cfg.suite.specs_dir) };
+  const snapshot: ExecutionSnapshot = {
+    engine: EXECUTION_ENGINE_VERSION,
+    specs_digest: hash.digest('hex'),
+    contract_version: policy.contract_version,
+    required_profiles: cfg.suite.profiles ? [...cfg.suite.profiles].sort() : 'scenario-declared',
+    scenario_filter: cfg.suite.scenarios ? [...cfg.suite.scenarios].sort() : 'all',
+    retries: cfg.suite.retries,
+    signed_out_path: cfg.suite.signed_out_path ?? null,
+    coverage_file: !!cfg.suite.coverage_file,
+  };
+  return { scenarios, policy, catalog, revision: executionRevision(snapshot), snapshot, root: at(cfg.suite.specs_dir) };
+}
+
+export function executionRevision(s: ExecutionSnapshot): string {
+  const canonical = JSON.stringify(Object.fromEntries(Object.entries(s).sort(([a], [b]) => a.localeCompare(b))));
+  return `suite_${createHash('sha256').update(canonical).digest('hex').slice(0, 16)}`;
 }
 
 /** Full-suite selection used when no impact analysis is available (Phase 6 refines this). */

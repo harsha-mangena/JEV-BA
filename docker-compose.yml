@@ -1,0 +1,88 @@
+# Service stack: PostgreSQL, one-shot migrations, control API, job worker(s),
+# and two fixture-shop deployments (clean and defective) used as demo targets.
+# Secrets come from the environment (see deploy/README.md); nothing is baked in.
+name: jev-ba
+
+x-qa: &qa
+  image: ${QA_IMAGE:-jev-ba/qa:local}
+  build: .
+  environment: &qa-env
+    DATABASE_URL: postgres://qa:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/qa
+    QA_SUITE_BASE_DIR: /app
+    QA_ARTIFACT_DIR: /var/qa/artifacts
+    QA_AUTONOMY_MODE: ${QA_AUTONOMY_MODE:-shadow}
+  volumes:
+    - artifacts:/var/qa/artifacts
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qa
+      POSTGRES_DB: qa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qa -d qa"]
+      interval: 2s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  migrate:
+    <<: *qa
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *qa
+    command: ["serve-api", "--port", "8080"]
+    environment:
+      <<: *qa-env
+      QA_ROLE: api
+      QA_METRICS_TOKEN: ${QA_METRICS_TOKEN:-}
+    ports: ["${QA_API_PORT:-8080}:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    <<: *qa
+    command: ["serve-worker", "--out", "/var/qa/runs"]
+    environment:
+      <<: *qa-env
+      QA_ROLE: worker
+      QA_LEASE_SECONDS: ${QA_LEASE_SECONDS:-60}
+      QA_SWEEP_INTERVAL_MS: ${QA_SWEEP_INTERVAL_MS:-300000}
+      QA_FIXTURE_TOKEN_SHOP: ${QA_FIXTURE_TOKEN:?set QA_FIXTURE_TOKEN}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    stop_grace_period: 30s
+
+  fixture-clean:
+    <<: *qa
+    entrypoint: ["npx", "--no-install", "tsx", "fixtures/test-app/src/main.ts"]
+    command: []
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4310"
+      QA_FIXTURE_TOKEN: ${QA_FIXTURE_TOKEN:?set QA_FIXTURE_TOKEN}
+      FIXTURE_COMMIT_SHA: ${CLEAN_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      FIXTURE_CHECKOUT_DELAY_MS: ${FIXTURE_CHECKOUT_DELAY_MS:-0}
+    healthcheck: { test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4310/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"], interval: 2s, retries: 30 }
+
+  fixture-defective:
+    <<: *qa
+    entrypoint: ["npx", "--no-install", "tsx", "fixtures/test-app/src/main.ts"]
+    command: []
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4311"
+      QA_FIXTURE_TOKEN: ${QA_FIXTURE_TOKEN:?set QA_FIXTURE_TOKEN}
+      FIXTURE_COMMIT_SHA: ${DEFECTIVE_SHA:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+      FIXTURE_DEFECTS: ${DEFECTIVE_DEFECTS:-total_off_by_one}
+    healthcheck: { test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4311/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"], interval: 2s, retries: 30 }
+
+volumes:
+  pgdata:
+  artifacts:

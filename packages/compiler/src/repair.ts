@@ -47,7 +47,8 @@ export async function proposeLocatorRepair(o: { runDir: string; result: CaseResu
   if (!ev || !dom) return { none: 'failure evidence lacks an event log or a DOM observation' };
   const events = (await readFile(join(o.runDir, ev.path), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as { kind: string; data: Record<string, unknown> });
   const failed = [...events].reverse().find((e) => e.kind === 'intent' && e.data.state === 'failed');
-  const persisted = failed && events.find((e) => e.kind === 'intent' && e.data.state === 'persisted' && e.data.intent_id === failed.data.intent_id);
+  // The failed record carries the step address itself; older logs only had it on the persisted record.
+  const persisted = failed && (failed.data.milestone_id !== undefined ? failed : events.find((e) => e.kind === 'intent' && e.data.state === 'persisted' && e.data.intent_id === failed.data.intent_id));
   if (!persisted) return { none: 'no failed step in the intent log' };
   const mi = o.scenario.milestones.findIndex((m) => m.id === persisted.data.milestone_id);
   const si = Number(persisted.data.step_index);

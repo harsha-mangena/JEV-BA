@@ -5,3 +5,4 @@ test-results/
 .env
 .env.*
 .qa-work/
+evidence/lanes/.*.json

@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { ProjectConfig, parseWith, type CaseResult } from '@qa/contracts';
 import { approveProposalFile, loadCoverageGraph } from '@qa/coverage';
-import type { BaselineKey } from '@qa/quality';
+import { BaselineConflict, type BaselineKey } from '@qa/quality';
 import { newToken } from './admin.ts';
 import { tokenHash, type Orchestrator } from './service.ts';
 import { loadSuite } from './suite.ts';
@@ -117,15 +117,24 @@ export class ReviewService {
     const bytes = await store.get(`${row.run_dir}/${m[1]}`);
     if (!bytes) throw new ApiError(410, 'gone', 'candidate artifact is no longer retained');
     const dep = await this.db.one<{ provider_deployment_id: string }>('select provider_deployment_id from deployments where id=$1', [run.deployment_id]);
-    const record = await baselines.approve(key, bytes, { approved_by: p.actor, commit_sha: run.commit_sha, deployment_id: dep?.provider_deployment_id ?? null, source: runId, expected_sha256: m[2]! });
-    await this.db.tx(async (c) => {
-      await c.query(
-        `insert into baseline_approvals(tenant_id, project_id, run_id, scenario_id, checkpoint, execution_profile, rendering_profile, version, sha256, commit_sha, approved_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [run.tenant_id, run.project_id, runId, q.scenario_id, q.checkpoint, q.execution_profile, key.rendering_profile, record.version, record.sha256, run.commit_sha, p.actor],
+    const expectedVersion = (a.expected as { baseline_version?: number }).baseline_version ?? 0;
+    // Compare-and-set: the version row is claimed (unique) before the store write, in one transaction.
+    return this.db.tx(async (c) => {
+      const claimed = await c.query(
+        `insert into baseline_approvals(tenant_id, project_id, run_id, scenario_id, checkpoint, execution_profile, rendering_profile, version, sha256, commit_sha, approved_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict do nothing`,
+        [run.tenant_id, run.project_id, runId, q.scenario_id, q.checkpoint, q.execution_profile, key.rendering_profile, expectedVersion + 1, m[2]!, run.commit_sha, p.actor],
       );
+      if (claimed.rowCount === 0) throw new ApiError(409, 'baseline_conflict', `baseline version ${expectedVersion + 1} was already approved; review against the current baseline`);
+      let record;
+      try {
+        record = await baselines.approve(key, bytes, { approved_by: p.actor, commit_sha: run.commit_sha, deployment_id: dep?.provider_deployment_id ?? null, source: runId, expected_sha256: m[2]!, expected_version: expectedVersion });
+      } catch (e) {
+        if (e instanceof BaselineConflict) throw new ApiError(409, 'baseline_conflict', e.message);
+        throw e;
+      }
       await this.orch.audit(c, p, 'baseline.approve', runId, { ...q, version: record.version, sha256: record.sha256 });
+      return record;
     });
-    return record;
   }
 
   // ---------- findings ----------

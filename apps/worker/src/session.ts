@@ -2,9 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
-import { EXECUTION_PROFILES } from '@qa/browser';
+import { EXECUTION_PROFILES, type StepOutcome } from '@qa/browser';
 import {
+  authorizeAction,
   parseRef,
+  type ActionRequest,
+  type AuthorizationDecision,
   resolveAllowedOrigins,
   type AssertionResult,
   type CaseResult,
@@ -17,7 +20,8 @@ import {
   type Verdict,
 } from '@qa/contracts';
 import { EvidenceLog } from '@qa/evidence';
-import { captureBaseline, evaluateAssertion, type EntityBaseline, type Evaluation, type FixtureClient } from '@qa/oracles';
+import { captureBaseline, evaluateAssertion, type EffectReceipt, type EntityBaseline, type Evaluation, type FixtureClient } from '@qa/oracles';
+import { MemoryIntentStore, reconcileIntent, type IntentState, type IntentStore, type Reconciliation } from './intents.ts';
 import type { BaselineStore, FindingLedger, VisualReviewer } from '@qa/quality';
 
 export interface AttemptOptions {
@@ -38,6 +42,8 @@ export interface AttemptOptions {
   quality?: QualityOptions;
   /** Read-only capability profile (production checks): nothing provisioned, only read-only actions permitted. */
   readOnly?: boolean;
+  /** Durable intent store (the service passes a fenced PostgreSQL store); defaults to an in-process store. */
+  intents?: IntentStore;
 }
 
 export interface QualityOptions {
@@ -73,15 +79,43 @@ export interface Session {
   readonly consoleErrors: string[];
   readonly completed: string[];
   readonly deadline: number;
+  /** Aborts on run cancellation or when the attempt deadline passes; pass it to every provider/adapter call. */
+  readonly signal: AbortSignal;
   resolveValue(ref: string): string;
   /** Throws Stop if navigation left the allowed origins, the run was cancelled, or the deadline passed. */
   checkpoint(): void;
+  /** Shared authorization service bound to this attempt's policy, scenario, environment, role and profile. */
+  authorize(request: ActionRequest): AuthorizationDecision;
+  /** Remaining attempt budget, capped at `cap` (never below 1 ms). */
+  remainingMs(cap: number): number;
+  /**
+   * Record an authorized intent before dispatch, run `fn` exactly once, and
+   * record the outcome. Durable storage and reconciliation plug in here.
+   */
+  dispatch(intent: DispatchIntent, fn: () => Promise<StepOutcome>): Promise<StepOutcome>;
   /** Evaluate a milestone's approved assertions; records and returns failures. */
   verify(m: Milestone): Promise<AssertionResult[]>;
   screenshot(name: string): Promise<void>;
 }
 
 export type Driver = (s: Session) => Promise<void>;
+
+export interface DispatchIntent {
+  intent_id: string;
+  operation: string;
+  description: string;
+  route: string;
+  control: unknown;
+  parameter_ref: string | null;
+  action_intent: string | null;
+  effect: string;
+  contract_intent: string | null;
+  risk_class: string;
+  mutation: string | null;
+  milestone_id: string;
+  step_index?: number;
+  [k: string]: unknown;
+}
 
 const usesSecrets = (s: Scenario) =>
   s.inputs.some((r) => parseRef(r).scope === 'secret') ||
@@ -113,6 +147,12 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
   let blockedNavigation: string | null = null;
   let cleanup: CaseResult['cleanup'] = { status: s.cleanup === 'none' ? 'skipped' : 'pending' };
   let shotCount = 0;
+  let owner: unknown;
+  /** Idempotency header for the dispatch in progress (read by the context route handler). */
+  let dispatchTag: { header: string; key: string } | null = null;
+  const intents = o.intents ?? new MemoryIntentStore();
+  // One signal for the whole attempt: run cancellation or the wall-clock deadline aborts in-flight adapter calls.
+  const attemptSignal = AbortSignal.any([...(o.signal ? [o.signal] : []), AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
 
   log.record('run_started', `${s.id} on ${profile}`, { scenario: s.id, mode: s.mode, profile, base_url: o.baseUrl, environment: o.environment, attempt: o.attemptNumber });
 
@@ -122,7 +162,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
     if (o.readOnly && (s.fixture || s.policy.mutations.length)) throw new Stop('BLOCKED', 'policy_denied', 'read-only profile: scenarios may not provision fixtures or mutate');
     if (s.fixture) {
       try {
-        fixture = await o.fixtures.provision(s.fixture);
+        fixture = await o.fixtures.provision(s.fixture, attemptSignal);
       } catch (e) {
         throw new Stop('ERROR', 'fixture_error', `fixture ${s.fixture}: ${(e as Error).message}`);
       }
@@ -132,17 +172,24 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       log.record('fixture_provisioned', `fixture ${fixture.name}`, { fixture_id: fixture.fixture_id, fields: Object.keys(fixture.data), signed_in: !!fixture.auth });
     }
 
-    const owner = fixture?.data.customer_id;
+    owner = fixture?.data.customer_id;
     const baseline = await captureBaseline(o.fixtures, owner === undefined ? [] : [String(owner)]).catch((e: Error) => {
       throw new Stop('ERROR', 'fixture_error', `baseline read failed: ${e.message}`);
     });
 
     const allowed = resolveAllowedOrigins(o.policy, s.policy.allowed_origin_profile, new URL(o.baseUrl).origin);
     context = await o.browser.newContext({ ...EXECUTION_PROFILES[profile].options, baseURL: o.baseUrl });
+    const baseOrigin = new URL(o.baseUrl).origin;
+    // The only route handler: origin allow-list, plus the idempotency key of the dispatch in progress
+    // on its state-changing same-origin requests (a second, per-dispatch handler could race with it).
     await context.route('**/*', async (route) => {
       const req = route.request();
       const url = new URL(req.url());
-      if (url.protocol === 'data:' || url.protocol === 'blob:' || allowed.has(url.origin)) return route.continue();
+      if (url.protocol === 'data:' || url.protocol === 'blob:' || allowed.has(url.origin)) {
+        const tag = dispatchTag;
+        if (tag && req.method() !== 'GET' && url.origin === baseOrigin) return route.continue({ headers: { ...req.headers(), [tag.header]: tag.key } });
+        return route.continue();
+      }
       log.record('network_blocked', `blocked request to ${url.origin}`, { url: `${url.origin}${url.pathname}`, navigation: req.isNavigationRequest() });
       if (req.isNavigationRequest() && req.frame() === page?.mainFrame()) blockedNavigation = url.origin;
       return route.abort('blockedbyclient');
@@ -176,12 +223,76 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       consoleErrors,
       completed,
       deadline,
+      signal: attemptSignal,
       resolveValue(ref) {
         const { scope, field } = parseRef(ref);
         if (!fx) throw new Stop('ERROR', 'fixture_error', `${ref} requested but the scenario has no fixture`);
         const v = scope === 'secret' ? fx.secrets[field] : fx.data[field];
         if (v === undefined) throw new Stop('ERROR', 'fixture_error', `${ref} was not provisioned`);
         return String(v);
+      },
+      authorize(request) {
+        return authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, request);
+      },
+      remainingMs(cap) {
+        return Math.max(1, Math.min(cap, deadline - Date.now()));
+      },
+      async dispatch(intent, fn) {
+        const adapter = o.fixtures;
+        const keyed = intent.mutation !== null && intent.contract_intent !== null && adapter.capabilities.keyed_intents.includes(intent.contract_intent);
+        const key = keyed ? intent.intent_id : null;
+        const move = async (to: IntentState, detail: string | null = null, receipts: EffectReceipt[] = []) => {
+          await intents.transition(intent.intent_id, to, detail, receipts).catch((e: Error) => {
+            throw new Stop('ERROR', 'infrastructure_error', `intent ${intent.intent_id} could not be recorded (${to}): ${e.message}`);
+          });
+          log.record('intent_transition', `${intent.intent_id} → ${to}`, { intent_id: intent.intent_id, state: to, detail, receipts: receipts.map((r) => r.entity_id) });
+        };
+        // Durable before any input: a worker that dies from here on leaves a record recovery can resolve.
+        await intents
+          .prepare({ intent_id: intent.intent_id, attempt_id: attemptId, scenario_id: s.id, execution_profile: profile, owner: owner === undefined ? null : String(owner), idempotency_key: key, effect: intent.effect, mutation: intent.mutation, contract_intent: intent.contract_intent, data: intent })
+          .catch((e: Error) => {
+            throw new Stop('ERROR', 'infrastructure_error', `intent could not be persisted; nothing was dispatched: ${e.message}`);
+          });
+        log.record('intent', `persisted: ${intent.description}`, { ...intent, idempotency_key: key, state: 'persisted', policy_decision: 'allowed' });
+        await move('DISPATCHING');
+        // The idempotency key travels only on this dispatch's state-changing same-origin requests.
+        const header = adapter.capabilities.idempotency_header;
+        dispatchTag = key && header ? { header, key } : null;
+        let outcome: StepOutcome;
+        try {
+          outcome = await fn();
+        } finally {
+          dispatchTag = null;
+        }
+        log.record('intent', `${outcome.status}: ${intent.description}`, { intent_id: intent.intent_id, state: outcome.status === 'done' ? 'acknowledged' : outcome.status === 'not_dispatched' ? 'failed' : 'effect_unknown', detail: outcome.detail });
+        if (outcome.status === 'not_dispatched') {
+          await move('NOT_DISPATCHED', outcome.detail);
+          return outcome;
+        }
+        const reconcile = async () =>
+          reconcileIntent((await intents.get(intent.intent_id))!, adapter, { signal: attemptSignal, settleMs: session.remainingMs(10_000) }).catch(
+            (e: Error): Reconciliation => ({ state: 'NEEDS_REVIEW', receipts: [], detail: `effect lookup failed: ${e.message}` }),
+          );
+        if (outcome.status === 'done') {
+          await move('ACKNOWLEDGED');
+          if (key) {
+            // Confirm the effect from the application, waiting out requests with this key that are still in flight.
+            const rec = await reconcile();
+            if (rec.state === 'NEEDS_REVIEW') {
+              await move('NEEDS_REVIEW', rec.detail, rec.receipts);
+              throw new Stop('NEEDS_REVIEW', 'effect_unreconciled', `${intent.description}: ${rec.detail}`);
+            }
+            if (rec.happened) await move('EFFECT_CONFIRMED', rec.detail, rec.receipts);
+            else log.record('intent_transition', `${intent.intent_id}: no effect recorded`, { intent_id: intent.intent_id, state: 'ACKNOWLEDGED', detail: rec.detail });
+          }
+          return outcome;
+        }
+        await move('EFFECT_UNKNOWN', outcome.detail);
+        await move('RECONCILING');
+        const rec = await reconcile();
+        await move(rec.state, rec.detail, rec.receipts);
+        if (rec.state === 'NEEDS_REVIEW') throw new Stop('NEEDS_REVIEW', 'effect_unreconciled', `${intent.description}: input may have been dispatched (${outcome.detail}); ${rec.detail}`);
+        return { ...outcome, detail: `${outcome.detail}; reconciled: ${rec.detail}` };
       },
       checkpoint() {
         if (blockedNavigation) throw new Stop('BLOCKED', 'origin_blocked', `navigation to disallowed origin ${blockedNavigation}`);
@@ -200,7 +311,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
               fixtures: o.fixtures,
               baseline,
               consoleErrors,
-              timeoutMs: s.budgets.assertion_timeout_ms,
+              timeoutMs: session.remainingMs(s.budgets.assertion_timeout_ms),
+              authorizeNavigation: (path) => authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, { op: 'NAVIGATE', route: path, path }).allowed,
               quality: {
                 baselines: o.quality?.baselines ?? null,
                 scenario_id: s.id,
@@ -218,7 +330,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
           const refs: string[] = [];
           for (const att of attachments ?? []) {
             const ref = await log.writeArtifact(att.kind, `${m.id}/${att.name}`, att.bytes);
-            refs.push(`${ref.path}#sha256=${ref.sha256}`);
+            if (ref) refs.push(`${ref.path}#sha256=${ref.sha256}`);
           }
           const result: AssertionResult = { milestone_id: m.id, index: ai, elapsed_ms: Date.now() - t0, ...plain, ...(refs.length ? { message: [plain.message, ...refs.map((x) => `artifact: ${x}`)].filter(Boolean).join('\n') } : {}) };
           assertions.push(result);
@@ -233,11 +345,13 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         return failed;
       },
       async screenshot(name) {
-        const shot = await p.screenshot({ fullPage: true }).catch(() => null);
+        const shot = await p.screenshot({ fullPage: true, mask: [p.locator('input[type=password]')] }).catch(() => null);
         if (shot) await log.writeArtifact('screenshot', `${String(shotCount++).padStart(2, '0')}-${name}.png`, shot);
       },
     };
 
+    const start = authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, { op: 'NAVIGATE', route: '/', path: s.start_path });
+    if (!start.allowed) throw new Stop('BLOCKED', 'policy_denied', `start page: ${start.reason}`);
     const response = await p.goto(s.start_path, { waitUntil: 'load', timeout: s.budgets.action_timeout_ms * 2 });
     session.checkpoint();
     if (fixture?.auth && o.signedOutPath && new URL(p.url()).pathname === o.signedOutPath) {
@@ -276,14 +390,14 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       });
     }
     if (page && verdict !== 'PASS') {
-      const shot = await page.screenshot({ fullPage: true }).catch(() => null);
+      const shot = await page.screenshot({ fullPage: true, mask: [page.locator('input[type=password]')] }).catch(() => null);
       if (shot) await log.writeArtifact('screenshot', 'failure.png', shot).catch(() => undefined);
     }
     if (context && tracing) {
       const tracePath = join(caseDir, 'trace.zip');
       await context.tracing
         .stop({ path: tracePath })
-        .then(async () => log.registerArtifact('trace', tracePath, await readFile(tracePath)))
+        .then(async () => log.registerSanitizedArchive('trace', tracePath))
         .catch((e: Error) => log.record('artifact', `trace capture failed: ${e.message}`));
     }
     await context?.close().catch(() => undefined);

@@ -1,11 +1,9 @@
-import type { ChoiceQuestion, S1RawAnswer, S1RawResponse, S1Request, SystemOneProvider } from './types.ts';
+import { ProviderUnavailableError } from './errors.ts';
+import { postJson, type TransportOptions } from './transport.ts';
+import type { S1RawAnswer, S1RawResponse, S1Request, SystemOneProvider } from './types.ts';
+import { validateResponse } from './validate.ts';
 
-export class ProviderUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProviderUnavailableError';
-  }
-}
+export { ProviderUnavailableError };
 
 /**
  * Circuit breaker: after `failureThreshold` consecutive failures the circuit
@@ -96,96 +94,136 @@ export class FailoverProvider implements SystemOneProvider {
 export class HttpS1Provider implements SystemOneProvider {
   constructor(
     readonly id: string,
-    private readonly o: { endpoint: string; apiKey?: string; timeoutMs?: number },
+    private readonly o: { endpoint: string; apiKey?: string } & Partial<TransportOptions>,
   ) {}
 
   async ask(req: S1Request, signal?: AbortSignal): Promise<S1RawResponse> {
-    const res = await fetch(this.o.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(this.o.apiKey ? { authorization: `Bearer ${this.o.apiKey}` } : {}) },
-      body: JSON.stringify(req),
-      redirect: 'error',
-      signal: signal ?? AbortSignal.timeout(this.o.timeoutMs ?? 20_000),
+    const r = await postJson(this.o.endpoint, req, this.o.apiKey ? { authorization: `Bearer ${this.o.apiKey}` } : {}, { timeoutMs: 20_000, ...this.o }, signal).catch((e: Error) => {
+      throw e instanceof ProviderUnavailableError ? new ProviderUnavailableError(`${this.id}: ${e.message}`) : e;
     });
-    if (!res.ok) throw new ProviderUnavailableError(`${this.id}: HTTP ${res.status}`);
-    return (await res.json()) as S1RawResponse;
+    return r.body as S1RawResponse;
   }
 }
 
+/** Where the TypeSafe wire contract implemented below comes from, and what has been verified. */
+export const TYPESAFE_CONTRACT = {
+  endpoint: 'https://api.typesafe.ai/v1/systemone',
+  default_model: 'jev-latest',
+  source: 'Public Go client github.com/chez-shanpu/typesafeai-go (systemone.go, question.go, answer.go); the provider API reference host was not reachable from the build environment',
+  request: 'POST {state, model, questions: {<key>: {type: choice|noul|score, instructions, criteria}}} with Authorization: Bearer',
+  response: '{model, answers: {<key>: {type, ...}}, usage: {input_tokens, output_tokens}}; header x-typesafe-request-id',
+  verified_live: false,
+} as const;
+
+type WireQuestion = { type: 'choice'; instructions: string; criteria: Record<string, string> } | { type: 'noul'; instructions: string };
+
 /**
- * TypeSafe / Jev adapter.
+ * TypeSafe / Jev adapter implementing the published System One contract:
+ * questions are a map keyed by caller-chosen keys; a choice question's
+ * criteria map each option key to its description; a noul answer is the
+ * probability that the statement is true. Question keys and option keys are
+ * routing identifiers; all meaning is in the instructions and criteria.
  *
- * UNVERIFIED WIRE FORMAT. The request/response field names below are derived
- * from public descriptions (state + typed questions; Choice returns a
- * probability per option and a confidence; Noul returns the probability that
- * a statement is true; up to 255 Choice options) — the provider's API
- * reference could not be read from the build environment. Run
- * `qa s1 probe` against the live endpoint before enabling autonomy; every
- * response still goes through strict validation, so a mismatch surfaces as
- * invalid heads (ABSTAIN), never as an action.
+ * Offline tests pin this encoding; a live probe (`qa s1 probe`) must pass
+ * against the real endpoint before the adapter is qualified for autonomy
+ * (TYPESAFE_CONTRACT.verified_live stays false until then). Every response is
+ * still strictly validated, so a mismatch yields invalid heads (ABSTAIN).
  */
 export class TypeSafeProvider implements SystemOneProvider {
   readonly id = 'typesafe';
-  static readonly WIRE_FORMAT_VERIFIED = false;
+  static readonly WIRE_FORMAT_VERIFIED = TYPESAFE_CONTRACT.verified_live;
+  /** Request id of the most recent call (support and evidence). */
+  lastRequestId: string | null = null;
 
-  constructor(private readonly o: { endpoint: string; apiKey: string; timeoutMs?: number }) {}
+  constructor(private readonly o: { endpoint?: string; apiKey: string } & Partial<TransportOptions>) {}
 
-  static encode(req: S1Request): { body: unknown; keyMaps: Record<string, Map<string, string>> } {
+  static encode(req: S1Request): { body: { state: unknown; model: string; questions: Record<string, WireQuestion> }; keyMaps: Record<string, Map<string, string>> } {
     const keyMaps: Record<string, Map<string, string>> = {};
-    const questions = req.questions.map((q) => {
-      if (q.kind === 'noul') return { id: q.id, type: 'noul', question: q.prompt };
-      const labels = new Map<string, string>();
-      const options = (q as ChoiceQuestion).options.map((o) => {
-        const text = `${o.key}: ${o.label}`;
-        labels.set(text, o.key);
-        labels.set(o.key, o.key);
-        return text;
-      });
-      keyMaps[q.id] = labels;
-      return { id: q.id, type: 'choice', question: q.prompt, options };
-    });
-    return { body: { model: req.model, state: req.context, questions }, keyMaps };
+    const questions: Record<string, WireQuestion> = {};
+    for (const q of req.questions) {
+      if (q.kind === 'noul') {
+        questions[q.id] = { type: 'noul', instructions: q.prompt };
+        continue;
+      }
+      const criteria: Record<string, string> = {};
+      for (const o of q.options) criteria[o.key] = o.label;
+      keyMaps[q.id] = new Map(q.options.map((o) => [o.key, o.key]));
+      questions[q.id] = { type: 'choice', instructions: q.prompt, criteria };
+    }
+    let state: unknown = req.context;
+    try {
+      state = JSON.parse(req.context);
+    } catch {
+      /* plain-text state */
+    }
+    return { body: { state, model: req.model, questions }, keyMaps };
   }
 
-  static decode(req: S1Request, raw: unknown, keyMaps: Record<string, Map<string, string>>): S1RawResponse {
+  /**
+   * Map the provider response into the neutral model without repairing it: an
+   * answer whose type does not match the question, or whose fields are
+   * missing, is passed through in a shape validation rejects.
+   */
+  static decode(req: S1Request, raw: unknown, _keyMaps?: Record<string, Map<string, string>>): S1RawResponse {
     const r = (raw ?? {}) as Record<string, unknown>;
-    const list: Array<Record<string, unknown>> = Array.isArray(r.answers)
-      ? (r.answers as Array<Record<string, unknown>>)
-      : Object.entries((r.answers ?? {}) as Record<string, Record<string, unknown>>).map(([id, a]) => ({ id, ...a }) as Record<string, unknown>);
+    const src = r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers) ? (r.answers as Record<string, Record<string, unknown>>) : null;
     const answers: S1RawResponse['answers'] = {};
-    for (const a of list) {
-      const id = String(a.id ?? a.question_id ?? '');
-      const q = req.questions.find((x) => x.id === id);
-      if (!q) {
-        answers[id] = a as unknown as S1RawAnswer;
+    if (!src) return { resolved_model: r.model, answers: undefined as unknown as S1RawResponse['answers'] };
+    for (const [key, a] of Object.entries(src)) {
+      const q = req.questions.find((x) => x.id === key);
+      if (!q || !a || typeof a !== 'object') {
+        answers[key] = a as unknown as S1RawAnswer;
         continue;
       }
-      if (q.kind === 'noul') {
-        answers[id] = { probabilities: { true: (a.probability ?? a.p ?? (a.probabilities as Record<string, unknown> | undefined)?.true) as unknown } };
+      if (a.type !== q.kind) {
+        answers[key] = { probabilities: {}, error: `answer type ${JSON.stringify(a.type)} does not match ${q.kind} question` };
         continue;
       }
-      const map = keyMaps[id]!;
-      const src = (a.probabilities ?? a.distribution ?? {}) as Record<string, unknown> | unknown[];
-      const probabilities: Record<string, unknown> = {};
-      if (Array.isArray(src)) q.options.forEach((o, i) => (probabilities[o.key] = src[i]));
-      else for (const [k, v] of Object.entries(src)) probabilities[map.get(k) ?? k] = v;
-      const selected = a.selected ?? a.answer ?? a.choice;
-      answers[id] = { probabilities, ...(selected !== undefined ? { selected: map.get(String(selected)) ?? selected } : {}), ...(a.confidence !== undefined ? { confidence: a.confidence } : {}) };
+      if (q.kind === 'noul') answers[key] = { probabilities: { true: a.noul } };
+      else answers[key] = { probabilities: a.probabilities as Record<string, unknown>, ...(a.choice !== undefined ? { selected: a.choice } : {}), ...(a.confidence !== undefined ? { confidence: a.confidence } : {}) };
     }
-    return { resolved_model: r.model ?? r.resolved_model, answers, ...(r.usage ? { usage: r.usage as S1RawResponse['usage'] } : {}) };
+    const usage = r.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    return { resolved_model: r.model, answers, ...(usage ? { usage } : {}) };
   }
 
   async ask(req: S1Request, signal?: AbortSignal): Promise<S1RawResponse> {
-    const { body, keyMaps } = TypeSafeProvider.encode(req);
-    const res = await fetch(this.o.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.o.apiKey}` },
-      body: JSON.stringify(body),
-      redirect: 'error',
-      signal: signal ?? AbortSignal.timeout(this.o.timeoutMs ?? 20_000),
+    const { body } = TypeSafeProvider.encode(req);
+    const r = await postJson(this.o.endpoint ?? TYPESAFE_CONTRACT.endpoint, body, { authorization: `Bearer ${this.o.apiKey}` }, { timeoutMs: 20_000, ...this.o }, signal).catch((e: Error) => {
+      throw e instanceof ProviderUnavailableError ? new ProviderUnavailableError(`typesafe: ${e.message}`) : e;
     });
-    if (!res.ok) throw new ProviderUnavailableError(`typesafe: HTTP ${res.status}`);
-    return TypeSafeProvider.decode(req, await res.json(), keyMaps);
+    this.lastRequestId = r.requestId;
+    return TypeSafeProvider.decode(req, r.body);
+  }
+}
+
+export interface CompatibilityRecord {
+  provider: string;
+  endpoint: string;
+  requested_model: string;
+  resolved_model: string | null;
+  request_id: string | null;
+  ok: boolean;
+  invalid_heads: Record<string, string>;
+  latency_ms: number;
+  checked_at: string;
+  contract_source: string;
+  error?: string;
+}
+
+/**
+ * Startup/qualification probe: send a tiny request and require every head to
+ * validate. The record is evidence; it never enables autonomy by itself.
+ */
+export async function probeProvider(p: SystemOneProvider, endpoint: string, model: string, signal?: AbortSignal): Promise<CompatibilityRecord> {
+  const req = probeRequest(model);
+  const started = Date.now();
+  const base = { provider: p.id, endpoint, requested_model: model, checked_at: new Date().toISOString(), contract_source: TYPESAFE_CONTRACT.source };
+  try {
+    const raw = await p.ask(req, signal);
+    const v = validateResponse(req, raw);
+    return { ...base, resolved_model: v.resolvedModel, request_id: (p as { lastRequestId?: string | null }).lastRequestId ?? null, ok: Object.keys(v.invalid).length === 0, invalid_heads: v.invalid, latency_ms: Date.now() - started };
+  } catch (e) {
+    return { ...base, resolved_model: null, request_id: null, ok: false, invalid_heads: {}, latency_ms: Date.now() - started, error: (e as Error).message };
   }
 }
 

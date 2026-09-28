@@ -88,6 +88,8 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     return ver;
   };
   const bumpCart = (userId: string) => cartVersions.delete(userId);
+  /** Idempotency keys of checkout requests still being processed (effect lookups report them as in flight). */
+  const inFlight = new Map<string, number>();
 
   const defectCss = () =>
     [
@@ -121,6 +123,11 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     const header = req.headers['x-qa-fixture-token'];
     if (!tokenMatches(Array.isArray(header) ? header[0] : header, opts.fixtureToken)) return sendJson(res, 401, { error: 'fixture token required' });
     const m = req.method ?? 'GET';
+    if (m === 'GET' && path === '/__qa/effects') {
+      const key = new URL(req.url ?? '/', 'http://x').searchParams.get('key') ?? '';
+      const effects = [...store.orders.values()].filter((o) => key && o.idempotency_key === key).map((o) => ({ kind: 'order', entity_id: o.id, owner: o.customer_id, idempotency_key: o.idempotency_key, created_at: o.created_at }));
+      return sendJson(res, 200, { effects, in_flight: inFlight.get(key) ?? 0 });
+    }
     if (m === 'GET' && path === '/__qa/version') return sendJson(res, 200, { commit_sha: revision, defects: [...defects].sort() });
     if (m === 'PUT' && path === '/__qa/defects') {
       const body = await json(req);
@@ -148,9 +155,48 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     mm = path.match(/^\/__qa\/users\/([\w-]+)$/);
     if (m === 'GET' && mm) {
       const user = store.users.get(mm[1]!);
-      return user ? sendJson(res, 200, { id: user.id, role: user.role, preferences: user.preferences }) : sendJson(res, 404, { error: 'unknown user' });
+      return user ? sendJson(res, 200, { id: user.id, role: user.role, preferences: user.preferences, profile: user.profile }) : sendJson(res, 404, { error: 'unknown user' });
     }
     return sendJson(res, 404, { error: 'not found' });
+  }
+
+  async function checkout(req: IncomingMessage, res: ServerResponse, user: User, idemKey: string | null): Promise<void> {
+    const f = await form(req);
+    if (opts.checkoutDelayMs) await sleep(opts.checkoutDelayMs);
+    const lines = store.carts.get(user.id) ?? [];
+    if (lines.length === 0) return renderCart(res, user, 409, { error: 'Your cart is empty.' });
+    if (f.get('cart_version') !== cartVersion(user.id)) {
+      return renderCart(res, user, 409, { error: 'Your cart changed. Please review it and submit again.' });
+    }
+    const address = (f.get('delivery_address') ?? '').trim();
+    if (!has('validation_bypass')) {
+      if (!address) return renderCart(res, user, 422, { error: 'Delivery address is required.', address });
+      if (address.length > 200) return renderCart(res, user, 422, { error: 'Delivery address must be 200 characters or fewer.', address });
+    }
+    if (idemKey) {
+      const prior = [...store.orders.values()].find((o) => o.customer_id === user.id && o.idempotency_key === idemKey);
+      if (prior) return redirect(res, `/orders/${prior.id}`);
+    }
+    const { shipping, total } = store.cartTotal(user.id);
+    const makeOrder = () => {
+      const order = {
+        id: `ord_${randomUUID().slice(0, 8)}`,
+        customer_id: user.id,
+        lines: lines.map((l) => ({ ...l, unit_price_minor_units: PRODUCTS.find((p) => p.id === l.product_id)!.price_minor_units })),
+        shipping_minor_units: shipping,
+        total_minor_units: total + (has('total_off_by_one') ? 1 : 0),
+        delivery_address: address,
+        created_at: new Date().toISOString(),
+        idempotency_key: idemKey,
+      };
+      store.orders.set(order.id, order);
+      return order;
+    };
+    const order = makeOrder();
+    if (has('checkout_double_submit')) makeOrder();
+    store.carts.set(user.id, []);
+    bumpCart(user.id);
+    return redirect(res, has('confirmation_missing') ? '/cart' : `/orders/${order.id}`);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -163,6 +209,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     const sid = cookies(req).get('sid');
     const userId = sid ? store.sessions.get(sid) : undefined;
     const user = userId ? (store.users.get(userId) ?? null) : null;
+    if (method !== 'GET' && method !== 'HEAD') store.writes.push({ method, path, user_id: user?.id ?? null, idempotency_key: (req.headers['x-qa-idempotency-key'] as string | undefined) ?? null, at: new Date().toISOString() });
 
     if (path === '/login') {
       if (method === 'GET') return page(res, 200, 'Sign in', null, v.loginPage());
@@ -196,37 +243,15 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       return renderCart(res, user, 200, { saved: true, address: f.get('delivery_address') ?? '' });
     }
     if (method === 'POST' && path === '/checkout') {
-      const f = await form(req);
-      if (opts.checkoutDelayMs) await sleep(opts.checkoutDelayMs);
-      const lines = store.carts.get(user.id) ?? [];
-      if (lines.length === 0) return renderCart(res, user, 409, { error: 'Your cart is empty.' });
-      if (f.get('cart_version') !== cartVersion(user.id)) {
-        return renderCart(res, user, 409, { error: 'Your cart changed. Please review it and submit again.' });
+      // Test integration: an idempotency key (scoped to this endpoint by the QA runner) deduplicates submissions,
+      // and requests still being processed are visible to effect lookups.
+      const idemKey = (req.headers['x-qa-idempotency-key'] as string | undefined) ?? null;
+      if (idemKey) inFlight.set(idemKey, (inFlight.get(idemKey) ?? 0) + 1);
+      try {
+        return await checkout(req, res, user, idemKey);
+      } finally {
+        if (idemKey) inFlight.set(idemKey, (inFlight.get(idemKey) ?? 1) - 1);
       }
-      const address = (f.get('delivery_address') ?? '').trim();
-      if (!has('validation_bypass')) {
-        if (!address) return renderCart(res, user, 422, { error: 'Delivery address is required.', address });
-        if (address.length > 200) return renderCart(res, user, 422, { error: 'Delivery address must be 200 characters or fewer.', address });
-      }
-      const { shipping, total } = store.cartTotal(user.id);
-      const makeOrder = () => {
-        const order = {
-          id: `ord_${randomUUID().slice(0, 8)}`,
-          customer_id: user.id,
-          lines: lines.map((l) => ({ ...l, unit_price_minor_units: PRODUCTS.find((p) => p.id === l.product_id)!.price_minor_units })),
-          shipping_minor_units: shipping,
-          total_minor_units: total + (has('total_off_by_one') ? 1 : 0),
-          delivery_address: address,
-          created_at: new Date().toISOString(),
-        };
-        store.orders.set(order.id, order);
-        return order;
-      };
-      const order = makeOrder();
-      if (has('checkout_double_submit')) makeOrder();
-      store.carts.set(user.id, []);
-      bumpCart(user.id);
-      return redirect(res, has('confirmation_missing') ? '/cart' : `/orders/${order.id}`);
     }
     if (method === 'GET' && path === '/orders') return page(res, 200, 'Your orders', user, v.ordersPage(store.ordersFor(user.id)));
     let mm = path.match(/^\/orders\/([\w-]+)$/);
@@ -268,7 +293,16 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
         return redirect(res, '/notes?flash=Note+updated.');
       }
     }
-    if (method === 'GET' && path === '/settings') return page(res, 200, 'Settings', user, v.settingsPage(user.preferences.theme, url.searchParams.has('saved')));
+    if (method === 'GET' && path === '/settings') return page(res, 200, 'Settings', user, v.settingsPage(user.preferences.theme, url.searchParams.has('saved'), user.profile), v.AUTOSAVE_SCRIPT);
+    if (method === 'POST' && (path === '/settings/profile' || path === '/settings/profile/autosave')) {
+      const nickname = ((await form(req)).get('nickname') ?? '').slice(0, 60);
+      user.profile.nickname = nickname;
+      return path.endsWith('autosave') ? sendJson(res, 200, { saved: true }) : redirect(res, '/settings?saved=1');
+    }
+    if (method === 'POST' && path === '/settings/email') {
+      user.profile.email_offers = (await form(req)).get('offers') === 'on';
+      return redirect(res, '/settings?saved=1');
+    }
     if (method === 'POST' && path === '/settings') {
       const theme = (await form(req)).get('theme');
       if (theme !== 'light' && theme !== 'dark') return page(res, 422, 'Settings', user, `<p role="alert" class="error">Unknown theme.</p>${v.settingsPage(user.preferences.theme, false)}`);

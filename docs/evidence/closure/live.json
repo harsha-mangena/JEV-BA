@@ -1,0 +1,11 @@
+{
+  "lane": "live",
+  "status": "BLOCKED",
+  "missing_prerequisites": [
+    "QA_S1_API_KEY"
+  ],
+  "requires": [
+    "provider-credentials"
+  ],
+  "at": "2026-09-28T08:35:44.292Z"
+}

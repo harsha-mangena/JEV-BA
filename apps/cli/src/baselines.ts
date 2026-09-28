@@ -10,6 +10,8 @@ interface Pending {
   sha256: string;
   scenario: string;
   profile: string;
+  /** Baseline version the candidate was compared against (0: none); approval is compare-and-set on it. */
+  expected_version: number;
 }
 
 async function pendingIn(runDir: string): Promise<{ report: RunReport; items: Pending[] }> {
@@ -21,7 +23,7 @@ async function pendingIn(runDir: string): Promise<{ report: RunReport; items: Pe
       const key = (a.expected as { key?: BaselineKey })?.key;
       const art = /artifact: (\S+)#sha256=([0-9a-f]{64})/.exec(a.message ?? '');
       if (!key || !art) continue;
-      items.push({ key, path: join(runDir, art[1]!), sha256: art[2]!, scenario: c.scenario_id, profile: c.execution_profile });
+      items.push({ key, path: join(runDir, art[1]!), sha256: art[2]!, scenario: c.scenario_id, profile: c.execution_profile, expected_version: (a.expected as { baseline_version?: number }).baseline_version ?? 0 });
     }
   }
   return { report, items };
@@ -41,7 +43,7 @@ export async function approve(a: ServiceArgs): Promise<number> {
   const store = new FsBaselineStore(resolve(a.baselines as string));
   const { report, items } = await pendingIn(resolve(runArg(a)));
   for (const i of items) {
-    const r = await approveFromEvidence(store, i.key, i.path, i.sha256, { approved_by: a.approver as string, commit_sha: a['commit-sha'] as string, deployment_id: report.deployment_id, source: `${report.run_id}` });
+    const r = await approveFromEvidence(store, i.key, i.path, i.sha256, { approved_by: a.approver as string, commit_sha: a['commit-sha'] as string, deployment_id: report.deployment_id, source: `${report.run_id}`, expected_version: i.expected_version });
     console.log(`approved ${i.scenario}/${i.key.checkpoint}/${i.profile} v${r.version}`);
   }
   return 0;

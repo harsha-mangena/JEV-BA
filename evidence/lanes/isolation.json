@@ -1,0 +1,34 @@
+{
+  "lane": "isolation",
+  "status": "PASSED",
+  "code_sha": "3c3dd978220795208d4d7a8c6c15283d142a240d",
+  "dirty": false,
+  "command": "npx vitest run --config vitest.isolation.config.ts --reporter=default --reporter=json --outputFile.json=evidence/lanes/.isolation.vitest.json",
+  "exit_code": 0,
+  "started_at": "2026-09-28T08:35:34.809Z",
+  "finished_at": "2026-09-28T08:35:43.973Z",
+  "environment": {
+    "node": "v22.22.2",
+    "platform": "linux-x64",
+    "ci": false,
+    "database": "configured",
+    "require_service": true
+  },
+  "dependencies": {
+    "playwright": "1.56.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "postgres": "psql (PostgreSQL) 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)"
+  },
+  "requires": [
+    "sandbox"
+  ],
+  "counts": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "skipped": 0
+  },
+  "skipped": [],
+  "digest": "fe88f06348b75b5386b15db4e6c102007a342d1f290c569d166165b716e5c374"
+}

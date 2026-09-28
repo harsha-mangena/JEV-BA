@@ -15,6 +15,9 @@
     "@qa/coverage": "*",
     "@qa/evidence": "*",
     "@qa/quality": "*",
-    "@qa/s1": "*"
+    "@qa/s2": "*",
+    "@qa/s1": "*",
+    "@qa/gate": "*",
+    "@qa/calibration": "*"
   }
 }

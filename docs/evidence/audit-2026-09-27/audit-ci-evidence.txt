@@ -1,0 +1,20 @@
+Exact-commit GitHub CI evidence
+
+Repository: harsha-mangena/JEV-BA
+Commit: cb83f85b94be7080d577580d2038d44a9cbc9074
+Workflow run: 36350121071
+URL: https://github.com/harsha-mangena/JEV-BA/actions/runs/36350121071
+Job: 108707054374 (test)
+Observed conclusion: success
+
+Summary transcribed from the GitHub job log retrieved during this audit:
+- Unit tests: 11 files passed; 108 tests passed.
+- tests/service/platform.test.ts: 10 tests passed.
+- tests/service/orchestration.test.ts: 14 tests passed.
+- E2E/service total: 9 files passed; 84 tests passed.
+- The workflow provisions PostgreSQL 16 and uses Node 22.
+
+The GitHub run was already completed; this audit inspected its metadata and
+logs but did not trigger a new remote workflow. Locally the audit independently
+ran 108 unit tests and 60 browser tests; 24 PostgreSQL tests skipped.
+The 13 independent audit probes are additional tests, absent from that CI run.

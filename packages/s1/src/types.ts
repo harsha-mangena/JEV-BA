@@ -37,6 +37,8 @@ export interface S1RawAnswer {
   probabilities: Record<string, unknown>;
   selected?: unknown;
   confidence?: unknown;
+  /** Set by an adapter when the provider's answer cannot be mapped (e.g. wrong answer type); the head is invalid. */
+  error?: string;
 }
 
 export interface S1RawResponse {
