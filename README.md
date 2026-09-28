@@ -16,9 +16,18 @@ Readiness is tracked per requirement/finding in [`docs/acceptance-inventory.json
 using the states `IMPLEMENTATION_PENDING`, `IMPLEMENTED_OFFLINE_VERIFIED`,
 `LIVE_VERIFICATION_REQUIRED`, `QUALIFIED_FOR_PROFILE` and `BLOCKED`. An
 independent audit (`docs/evidence/audit-2026-09-27/`) found gaps F01–F10 in the
-first implementation; its probes run as the mandatory `audit` lane
-(`tests/audit/`). Nothing is described as complete unless its lane evidence
-supports it.
+first implementation; its 13 probes run as the mandatory `audit` lane
+(`tests/audit/`) and now pass. The closure report is
+[`docs/closure-report.md`](docs/closure-report.md).
+
+| Item | State |
+| --- | --- |
+| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency | `IMPLEMENTED_OFFLINE_VERIFIED` |
+| F01 TypeSafe/Jev contract, F07 vision S2 | `LIVE_VERIFICATION_REQUIRED` (provider credentials) |
+| Calibrated autonomy for any profile | `BLOCKED` (no representative labelled data or live record; workers run calibrated exploration in shadow mode) |
+
+Nothing is described as complete unless its lane evidence supports it; mocked
+or skipped tests are never counted as live verification.
 
 ## Quick start (local)
 
@@ -46,6 +55,10 @@ npm run qa -- bootstrap --tenant acme --project shop --config project.yaml --tok
 npm run qa -- serve-api --port 8080     # API, webhooks, /dashboard
 npm run qa -- serve-worker              # jobs, outbox, sweepers
 ```
+
+Containers: `docker build -t jev-ba/qa:local .` and `docker-compose.yml`; roles,
+migrations, configuration keys and the unattended demo flow are in
+[`deploy/README.md`](deploy/README.md).
 
 Deployments arrive via `POST /v1/deployment-events`, `POST /v1/webhooks/github`
 or `POST /v1/webhooks/vercel/:project`; results are published as the required

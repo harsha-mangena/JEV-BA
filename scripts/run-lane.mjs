@@ -62,7 +62,8 @@ const manifest = {
   lane: name,
   status: result.status === 0 ? 'PASSED' : 'FAILED',
   code_sha: sh('git rev-parse HEAD'),
-  dirty: (sh('git status --porcelain') ?? '').length > 0,
+  // Lane manifests themselves are excluded: writing one must not mark the next lane's code as dirty.
+  dirty: (sh("git status --porcelain -- . ':(exclude)evidence/lanes'") ?? '').length > 0,
   command,
   exit_code: result.status,
   started_at: started.toISOString(),

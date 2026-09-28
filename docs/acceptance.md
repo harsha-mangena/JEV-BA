@@ -13,6 +13,22 @@
 | Calibration and end-to-end measurements expose sample sizes, coverage and limitations | `calibration.test.ts`; `CalibrationReport.sample_counts`, `limitations`, cohort support |
 | Reports let an engineer reproduce a finding from deployment, fixture, scenario and evidence identifiers | Case results carry attempt ids, deployment and SHA, fixture ids in events, checksummed artifacts; dashboard run pages |
 
-Not demonstrated here: behaviour against a live TypeSafe endpoint, a live
-Vercel project, and real-world calibration data — each has a probe or guide
-(`qa s1 probe`, `docs/deployment-integration.md`, `evals/README.md`).
+## Completion phases (audit F01–F10)
+
+| Criterion | Demonstrated by |
+| --- | --- |
+| Every driver authorizes by effect; missing, misspelled or conflicting intents, relabeled controls, unaccepted parameters and unauthorized autosave never reach the backend (F02) | `tests/e2e/authorization.test.ts` (backend write journal + adapter entity oracle); `packages/contracts/test/authorize.test.ts`; audit F02a/F02b |
+| Possibly-dispatched effects survive worker loss and are reconciled from the application, never duplicated (F09); leases are fenced and tenant admission is atomic | `tests/service/durability.test.ts` (real worker process SIGKILLed mid-checkout); `docs/evidence/phase2/`; `docs/evidence/phase10/demo-flow.json` step 3 |
+| Generated code cannot touch the host (F03); traces and artifacts carry no credentials (F06) | `tests/isolation/sandbox.test.ts`; `packages/compiler/test/lint.test.ts`; `packages/evidence/test/sanitize.test.ts`; audit F03/F06 |
+| S1 speaks the published contract (F01) with bounded transport and combined cancellation (F08) | `packages/s1/test/providers.test.ts`; audit F01a/F01b/F08; live lane (BLOCKED without credentials) |
+| Autonomy modes, calibration identity and resolved-model binding (F04) | `packages/gate/test/gate.test.ts`; audit F04a/F04b/F04c; `tests/service/promotion.test.ts` (qualification downgrade) |
+| Vision S2 with screenshots and fulfilled context requests (F07); explicit action/frame/browser capabilities (F10) | `tests/e2e/capabilities.test.ts`; `packages/s2/test/anthropic.test.ts`; audit F07; `tests/e2e/profiles.test.ts` |
+| Results are bound to an execution snapshot; promotions are single-use and re-checked (F05) | audit F05/F05b; `tests/service/promotion.test.ts` |
+| A clean deployment is promoted, a defective one is held, a crashed worker recovers — unattended, on the built image | `deploy/demo/run-demo.mjs` → `docs/evidence/phase10/demo-flow.json` |
+
+Not demonstrated here: behaviour against a live TypeSafe endpoint or a live
+Claude vision call (credentials absent: the `live` and `live_s2` lanes are
+recorded as BLOCKED), a live Vercel/GitHub project, and representative
+calibration data (no profile is qualified: `docs/evidence/phase11/`). Each has a
+probe or guide (`qa s1 probe`, `docs/deployment-integration.md`, `evals/README.md`,
+`qa qualify`).
