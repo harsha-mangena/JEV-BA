@@ -1,0 +1,115 @@
+{
+  "F01a": {
+    "questions_is_array": false,
+    "first_question_fields": []
+  },
+  "F01b": {
+    "valid_heads": [
+      "form_present"
+    ],
+    "invalid": {}
+  },
+  "F08": {
+    "rejected": true,
+    "elapsed_ms": 316,
+    "configured_timeout_ms": 20
+  },
+  "F04a": {
+    "outcome": "ESCALATE",
+    "reasons": [
+      "resolved_model_unknown"
+    ]
+  },
+  "F04b": {
+    "outcome": "ESCALATE",
+    "reasons": [
+      "calibration_unqualified"
+    ]
+  },
+  "F05": {
+    "old_revision": "suite_27736253629c136a",
+    "new_revision": "suite_69c12f3a4476d8a3",
+    "old_required_cases": 9,
+    "new_required_cases": 12
+  },
+  "F02a": {
+    "validation_issues": [
+      {
+        "path": "milestones.1.steps.1.intent",
+        "message": "button \"Place order\" is bound to mutation intent checkout.submit; the step must declare it"
+      }
+    ],
+    "mutations_authorized": [],
+    "verdict": "BLOCKED",
+    "backend_order_assertion": {
+      "milestone_id": "order_persisted",
+      "index": 1,
+      "type": "order_count_delta",
+      "status": "not_run",
+      "elapsed_ms": 0
+    },
+    "gate": {
+      "eligible": false,
+      "reasons": [
+        "checkout_existing_customer@chromium_desktop: BLOCKED"
+      ]
+    }
+  },
+  "F02b": {
+    "mutations_authorized": [],
+    "unknown_actions": "read_only_exploration",
+    "verdict": "BLOCKED",
+    "backend_order_assertion": {
+      "milestone_id": "order_persisted",
+      "index": 1,
+      "type": "order_count_delta",
+      "status": "not_run",
+      "elapsed_ms": 0
+    }
+  },
+  "F03": {
+    "lint": [
+      "import from \"fs\" is not allowed (line 2)"
+    ],
+    "validation_status": "rejected",
+    "wrote_outside_workdir": false
+  },
+  "F06": {
+    "verdict": "PASS",
+    "archived_files_containing_fixture_credentials": []
+  },
+  "F07": {
+    "called": true,
+    "screenshot_present": true,
+    "input_fields": [
+      "goal",
+      "milestone_id",
+      "observation",
+      "s1_distributions",
+      "unmet_assertions",
+      "environment_policy_summary",
+      "missing_information",
+      "screenshot_png"
+    ]
+  },
+  "F05b": {
+    "eligible": false,
+    "run_id": "old-desktop-run",
+    "reasons": [
+      "suite or policy changed since the run; results are stale"
+    ]
+  },
+  "F04c": {
+    "verdict": "NEEDS_REVIEW",
+    "decisions": [
+      {
+        "requested_model": "jev-version-a",
+        "resolved_model": "jev-version-b",
+        "reasons": [
+          "calibration_config_mismatch"
+        ],
+        "outcome": "ABSTAIN"
+      }
+    ]
+  }
+}

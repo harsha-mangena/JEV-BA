@@ -1,0 +1,12 @@
+{
+  "lane": "live_s2",
+  "status": "BLOCKED",
+  "missing_prerequisites": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "requires": [
+    "anthropic-credentials",
+    "browser"
+  ],
+  "at": "2026-09-28T08:35:44.361Z"
+}

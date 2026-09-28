@@ -1,10 +1,10 @@
 {
-  "started_at": "2026-09-28T08:25:27.478Z",
+  "started_at": "2026-09-28T08:36:14.083Z",
   "steps": [
     {
       "step": "clean deployment",
       "run": {
-        "run_id": "run_yQ7byLcIbr7f",
+        "run_id": "run_hCIK2Ndp8UNf",
         "state": "COMPLETED",
         "gate": {
           "reasons": [],
@@ -23,14 +23,14 @@
       },
       "promotion": {
         "decision": {
-          "decision_id": "prom_G7pfLWONB3hF",
+          "decision_id": "prom_Jbkr3zYW08Vu",
           "eligible": true,
           "reasons": [],
-          "run_id": "run_yQ7byLcIbr7f",
+          "run_id": "run_hCIK2Ndp8UNf",
           "expires_in_seconds": 900
         },
         "consume": {
-          "decision_id": "prom_G7pfLWONB3hF",
+          "decision_id": "prom_Jbkr3zYW08Vu",
           "promoted": true,
           "reasons": []
         }
@@ -40,7 +40,7 @@
     {
       "step": "defective deployment",
       "run": {
-        "run_id": "run_xz1Gw23FN_mN",
+        "run_id": "run__ETx5A_vdWEY",
         "state": "COMPLETED",
         "gate": {
           "reasons": [
@@ -61,16 +61,16 @@
       },
       "promotion": {
         "decision": {
-          "decision_id": "prom_lobiVblpX4JR",
+          "decision_id": "prom_pxITVoQMoVq1",
           "eligible": false,
           "reasons": [
             "checkout_existing_customer@chromium_desktop: FAIL"
           ],
-          "run_id": "run_xz1Gw23FN_mN",
+          "run_id": "run__ETx5A_vdWEY",
           "expires_in_seconds": 900
         },
         "consume": {
-          "decision_id": "prom_lobiVblpX4JR",
+          "decision_id": "prom_pxITVoQMoVq1",
           "promoted": false,
           "reasons": [
             "the decision was not eligible"
@@ -78,7 +78,7 @@
         }
       },
       "earlier_clean_decision_consumed_after_new_deployment": {
-        "decision_id": "prom_c_J9NIvLKKX3",
+        "decision_id": "prom_EukVu1EzWjUJ",
         "promoted": false,
         "reasons": [
           "deployment clean-1 is not the current candidate (defective-1)",
@@ -91,8 +91,8 @@
     },
     {
       "step": "worker SIGKILL mid-checkout",
-      "killed_at": "2026-09-28T08:26:15.093Z",
-      "intent": "checkout_existing_customer.chromium_desktop.a1.c6f03f.i2",
+      "killed_at": "2026-09-28T08:37:01.789Z",
+      "intent": "checkout_existing_customer.chromium_desktop.a1.e979ae.i2",
       "intent_state_at_kill": "DISPATCHING",
       "transitions": [
         [
@@ -116,7 +116,7 @@
           "2"
         ]
       ],
-      "receipts": "order\tord_49c11f5a",
+      "receipts": "order\tord_073c98ed",
       "jobs": [
         [
           "readiness",
@@ -144,7 +144,7 @@
         ]
       ],
       "run": {
-        "run_id": "run_uCXHm8GMVlYt",
+        "run_id": "run_fOgmvQkq7Nfp",
         "state": "COMPLETED",
         "gate": {
           "reasons": [],
@@ -163,21 +163,21 @@
       },
       "promotion": {
         "decision": {
-          "decision_id": "prom_4oCBkW-qWvv0",
+          "decision_id": "prom_-hxSzknsiAd8",
           "eligible": true,
           "reasons": [],
-          "run_id": "run_uCXHm8GMVlYt",
+          "run_id": "run_fOgmvQkq7Nfp",
           "expires_in_seconds": 900
         },
         "consume": {
-          "decision_id": "prom_4oCBkW-qWvv0",
+          "decision_id": "prom_-hxSzknsiAd8",
           "promoted": true,
           "reasons": []
         }
       },
       "cleanup_after_recovery": "all obligations done",
       "intents_needing_review": [
-        "notes_crud.chromium_desktop.a1.0167bf.i5\tnotes_crud\tnotes.delete\tnotes.delete is not recorded under an idempotency key by fixture-shop; inspect the application"
+        "notes_crud.chromium_desktop.a1.85c487.i5\tnotes_crud\tnotes.delete\tnotes.delete is not recorded under an idempotency key by fixture-shop; inspect the application"
       ]
     }
   ],
@@ -207,6 +207,6 @@
     "qa_findings_open 0"
   ],
   "result": "PASSED",
-  "finished_at": "2026-09-28T08:26:34.928Z",
-  "image": "sha256:a81cdf0d6fa99c6969f3480a3b4421d9fbd9439f7b20f6a15ace51dd59edce0a"
+  "finished_at": "2026-09-28T08:37:26.120Z",
+  "image": "sha256:9c2891cf74693ecd15a9fb8dfa3154979a4947b4ba4fb560341f96f26e0db726"
 }
