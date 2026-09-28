@@ -151,6 +151,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
   /** Idempotency header for the dispatch in progress (read by the context route handler). */
   let dispatchTag: { header: string; key: string } | null = null;
   const intents = o.intents ?? new MemoryIntentStore();
+  /** Acknowledged mutations the application cannot confirm by key; settled when this attempt ends under its live lease. */
+  const awaitingSettlement: string[] = [];
   // One signal for the whole attempt: run cancellation or the wall-clock deadline aborts in-flight adapter calls.
   const attemptSignal = AbortSignal.any([...(o.signal ? [o.signal] : []), AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
 
@@ -282,9 +284,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
               await move('NEEDS_REVIEW', rec.detail, rec.receipts);
               throw new Stop('NEEDS_REVIEW', 'effect_unreconciled', `${intent.description}: ${rec.detail}`);
             }
-            if (rec.happened) await move('EFFECT_CONFIRMED', rec.detail, rec.receipts);
-            else log.record('intent_transition', `${intent.intent_id}: no effect recorded`, { intent_id: intent.intent_id, state: 'ACKNOWLEDGED', detail: rec.detail });
-          }
+            await move(rec.happened ? 'EFFECT_CONFIRMED' : 'RECONCILED', rec.detail, rec.receipts);
+          } else if (intent.effect !== 'none') awaitingSettlement.push(intent.intent_id);
           return outcome;
         }
         await move('EFFECT_UNKNOWN', outcome.detail);
@@ -382,6 +383,14 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       message = (e as Error).message.split('\n')[0] ?? String(e);
     }
   } finally {
+    // This worker kept custody from acknowledgement to the end of the attempt: the effect is settled, not uncertain.
+    // A worker that dies before this point leaves the intent ACKNOWLEDGED, and recovery reconciles it.
+    for (const id of awaitingSettlement) {
+      await intents
+        .transition(id, 'SETTLED', 'acknowledged by the application; the owning attempt finished under its live lease')
+        .then(() => log.record('intent_transition', `${id} → SETTLED`, { intent_id: id, state: 'SETTLED' }))
+        .catch((e: Error) => log.record('intent_transition', `${id} could not be settled (left for recovery): ${e.message}`, { intent_id: id, state: 'ACKNOWLEDGED' }));
+    }
     // Every approved assertion is reported: anything not evaluated is visibly not_run.
     const reported = new Set(assertions.map((a) => `${a.milestone_id}#${a.index}`));
     for (const m of s.milestones) {

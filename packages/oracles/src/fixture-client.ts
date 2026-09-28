@@ -23,7 +23,7 @@ export interface OwnedOrder {
  */
 export class FixtureClient implements ApplicationAdapter {
   readonly id = 'fixture-shop';
-  readonly adapter_version = 'fixture-shop-adapter/2';
+  readonly adapter_version = 'fixture-shop-adapter/3';
   readonly capabilities: AdapterCapabilities = {
     readiness: true,
     fixtures: true,
@@ -33,7 +33,7 @@ export class FixtureClient implements ApplicationAdapter {
     effect_lookup: true,
     idempotency: true,
     cleanup: true,
-    keyed_intents: ['checkout.submit'],
+    keyed_intents: ['checkout.submit', 'cart.add'],
     idempotency_header: 'x-qa-idempotency-key',
   };
 

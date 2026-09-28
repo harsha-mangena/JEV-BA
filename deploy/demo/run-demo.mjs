@@ -4,7 +4,9 @@
 //   2. a defective deployment is tested, its gate is held and promotion is refused
 //      (and the older clean decision can no longer promote either);
 //   3. a worker container is SIGKILLed mid-checkout; a replacement recovers the
-//      shard (lease expiry, fencing, intent reconciliation) and the run completes.
+//      shard (lease expiry, fencing, intent reconciliation) and the run completes;
+//      any effect it cannot verify holds the gate and promotion until an admin
+//      adjudicates it and the held cases are rerun.
 // Usage: node deploy/demo/run-demo.mjs [--keep] [--out docs/evidence/phase10]
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -103,12 +105,49 @@ try {
   const transitions = psql(`select coalesce(from_state,'-'), to_state, fence from intent_transitions where intent_id='${inflight}' order by id`).split('\n').map((l) => l.split('\t'));
   const receipts = psql(`select kind, entity_id from effect_receipts where intent_id='${inflight}'`);
   const jobs = psql(`select kind, state, attempts, fence from jobs where run_id='${crashRun}' order by id`).split('\n').map((l) => l.split('\t'));
-  const crashPromotion = await promote(tokens, 'clean-2', CLEAN_SHA);
   // The dead worker's fixtures are cleaned by the durable cleanup obligations (sweeper).
   await until('orphaned fixtures swept', async () => psql(`select count(*) from cleanup_tasks where state<>'done'`) === '0', 120_000);
-  const review = psql(`select intent_id, scenario_id, contract_intent, detail from action_intents where state='NEEDS_REVIEW'`);
-  evidence.steps.push({ step: 'worker SIGKILL mid-checkout', killed_at: killedAt, intent: inflight, intent_state_at_kill: atKill, transitions, receipts, jobs, run: summary(recovered), promotion: crashPromotion, cleanup_after_recovery: 'all obligations done', intents_needing_review: review ? review.split('\n') : [] });
-  if (recovered.run.state !== 'COMPLETED' || !recovered.run.gate?.eligible || !transitions.some((t) => t[1] === 'RECONCILED')) throw new Error('the crashed run did not recover with a reconciled intent');
+  if (recovered.run.state !== 'COMPLETED' || !transitions.some((t) => t[1] === 'RECONCILED')) throw new Error('the crashed run did not recover with a reconciled intent');
+
+  // Any effect the dead worker left that could not be verified (e.g. an unkeyed note deletion) must hold the gate
+  // and promotion — however the fresh cases went — until an admin adjudicates it and the held cases are rerun.
+  const obligations = (await http('GET', `/v1/runs/${crashRun}/obligations`, tokens.viewer)).json.obligations ?? [];
+  const gateQuery = new URLSearchParams({ project_id: 'shop', environment: 'staging', deployment_id: 'clean-2', commit_sha: CLEAN_SHA });
+  const gateWhileOpen = (await http('GET', `/v1/gate?${gateQuery}`, tokens.viewer)).json;
+  const heldPromotion = await promote(tokens, 'clean-2', CLEAN_SHA);
+  const adjudications = [];
+  let final = recovered;
+  let finalPromotion = heldPromotion;
+  if (obligations.length > 0) {
+    if (gateWhileOpen.eligible || recovered.run.gate?.eligible || heldPromotion.consume?.promoted) throw new Error(`promotion was not held by ${obligations.length} open effect obligation(s)`);
+    for (const o of obligations) {
+      const r = await http('POST', `/v1/intents/${o.intent_id}/adjudicate`, tokens.admin, { resolution: 'effect_present_accepted', note: 'demo: test-owned effect inside the dead worker fixture; its cleanup obligation was swept' });
+      if (r.status !== 200) throw new Error(`adjudication of ${o.intent_id} failed: ${r.status} ${JSON.stringify(r.json)}`);
+      adjudications.push(r.json);
+    }
+    const retry = await http('POST', `/v1/runs/${crashRun}/retry`, tokens.ci, { reason: 'effect obligations adjudicated' });
+    if (retry.status !== 200) throw new Error(`retry refused: ${retry.status} ${JSON.stringify(retry.json)}`);
+    final = await waitRun(tokens, crashRun);
+    finalPromotion = await promote(tokens, 'clean-2', CLEAN_SHA);
+  }
+  evidence.steps.push({
+    step: 'worker SIGKILL mid-checkout',
+    killed_at: killedAt,
+    intent: inflight,
+    intent_state_at_kill: atKill,
+    transitions,
+    receipts,
+    jobs,
+    recovered_run: summary(recovered),
+    open_effect_obligations: obligations,
+    gate_while_obligations_open: gateWhileOpen,
+    promotion_while_obligations_open: heldPromotion,
+    adjudications,
+    run: summary(final),
+    promotion: finalPromotion,
+    cleanup_after_recovery: 'all obligations done',
+  });
+  if (final.run.state !== 'COMPLETED' || !final.run.gate?.eligible || !finalPromotion.consume?.promoted) throw new Error('the recovered deployment was not promotable once its obligations were resolved');
 
   const metrics = await fetch(`${API}/metrics`, { headers: { authorization: `Bearer ${env.QA_METRICS_TOKEN}` } }).then((r) => r.text());
   evidence.metrics = metrics.split('\n').filter((l) => l && !l.startsWith('#'));

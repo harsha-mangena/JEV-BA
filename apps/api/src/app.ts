@@ -154,6 +154,11 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
     const { reason } = z.object({ reason: z.string().min(1) }).strict().parse(req.body ?? {});
     return { run: await orch.retryRun(await auth(req), req.params.id, reason) };
   });
+  app.get<{ Params: { id: string } }>('/v1/runs/:id/obligations', async (req) => ({ obligations: await orch.obligations(await auth(req), req.params.id) }));
+  app.post<{ Params: { id: string } }>('/v1/intents/:id/adjudicate', async (req) => {
+    const a = z.object({ resolution: z.enum(['effect_absent', 'effect_present_accepted', 'effect_reverted']), note: z.string().min(1).max(2000) }).strict().parse(req.body ?? {});
+    return orch.adjudicateIntent(await auth(req), req.params.id, a);
+  });
   app.get('/v1/gate', async (req) => {
     const q = z.object({ project_id: z.string(), environment: z.string(), deployment_id: z.string(), commit_sha: z.string() }).parse(req.query);
     return orch.gateStatus(await auth(req), q);

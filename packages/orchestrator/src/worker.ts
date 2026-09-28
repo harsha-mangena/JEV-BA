@@ -4,7 +4,7 @@ import { evaluateReleaseGate, type CaseResult, type ExecutionProfileId } from '@
 import { FixtureClient } from '@qa/oracles';
 import { recoverIntents, runSuite, type ExplorationOptions } from '@qa/worker';
 import { autonomyMode, type GateConfig } from '@qa/gate';
-import { PgIntentStore } from './intents.ts';
+import { describeObligation, outstandingObligations, PgIntentStore } from './intents.ts';
 import { basename } from 'node:path';
 import { uploadDir } from '@qa/evidence';
 import { FindingLedger } from '@qa/quality';
@@ -248,9 +248,41 @@ export class JobWorker {
     const cases = job.payload.cases as Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
     const advisory = job.payload.advisory === true;
 
-    // Resolve anything an earlier lease of this shard may have dispatched before running it again.
-    const intents = new PgIntentStore(this.db, { tenant_id: run.tenant_id, run_id: run.id, run_attempt: run.attempt, shard: Number(job.payload.shard), job_id: job.id, fence: job.fence });
+    // Resolve anything an earlier lease or attempt may have dispatched for these cases before running them again.
+    const intents = new PgIntentStore(this.db, { tenant_id: run.tenant_id, run_id: run.id, run_attempt: run.attempt, shard: Number(job.payload.shard), job_id: job.id, fence: job.fence, cases });
     for (const r of await recoverIntents(intents, fixtures, { settleMs: 10_000 })) this.log(`recovered intent ${r.intent_id}: ${r.state} (${r.detail ?? ''})`);
+    // A case whose earlier effect is still uncertain is never replayed: replaying could duplicate an effect nobody has
+    // accounted for. It is reported as NEEDS_REVIEW until the obligation is adjudicated and the run is retried.
+    const held = new Map<string, string[]>();
+    for (const r of await intents.outstanding()) {
+      const k = `${r.scenario_id}@${r.execution_profile}`;
+      held.set(k, [...(held.get(k) ?? []), `${r.intent_id} (${r.contract_intent ?? r.effect}) is ${r.state}${r.detail ? `: ${r.detail}` : ''}`]);
+    }
+    const runnable = cases.filter((c) => !held.has(`${c.scenario_id}@${c.execution_profile}`));
+    const heldResults: CaseResult[] = cases
+      .filter((c) => held.has(`${c.scenario_id}@${c.execution_profile}`))
+      .map((c) => {
+        const sc = suite.scenarios.find((x) => x.id === c.scenario_id);
+        const now = new Date().toISOString();
+        this.log(`not replaying ${c.scenario_id}@${c.execution_profile}: ${held.get(`${c.scenario_id}@${c.execution_profile}`)!.join('; ')}`);
+        return {
+          scenario_id: c.scenario_id,
+          requirement_ids: sc?.requirement_ids ?? [],
+          execution_profile: c.execution_profile,
+          attempt_id: `${c.scenario_id}.${c.execution_profile}.held.f${job.fence}`,
+          critical: sc?.critical ?? true,
+          verdict: 'NEEDS_REVIEW',
+          reason: 'effect_unreconciled',
+          message: `not replayed: an earlier effect is unresolved — ${held.get(`${c.scenario_id}@${c.execution_profile}`)!.join('; ')}. Adjudicate the intent, then retry the run.`,
+          started_at: now,
+          finished_at: now,
+          milestones_completed: [],
+          assertions: [],
+          artifacts: [],
+          cleanup: { status: 'skipped', detail: 'not executed' },
+          prior_attempts: [],
+        } satisfies CaseResult;
+      });
 
     const ac = new AbortController();
     const poll = setInterval(() => {
@@ -262,13 +294,14 @@ export class JobWorker {
         })
         .catch(() => undefined);
     }, this.o.cancelPollMs ?? 1000);
-    let results: CaseResult[];
-    let runDirKey: string;
+    let results: CaseResult[] = [];
+    let runDirKey: string | null = null;
     const ledger = new FindingLedger();
     try {
+      if (runnable.length === 0) throw new NothingToRun();
       const { report, runDir } = await runSuite({
         quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha, ...(this.orch.deps.visualReviewer ? { reviewer: this.orch.deps.visualReviewer } : {}) },
-        scenarios: suite.scenarios.filter((s) => cases.some((c) => c.scenario_id === s.id)),
+        scenarios: suite.scenarios.filter((s) => runnable.some((c) => c.scenario_id === s.id)),
         policy: suite.policy,
         baseUrl: url,
         environment: run.environment,
@@ -278,7 +311,7 @@ export class JobWorker {
         commitSha: run.commit_sha,
         revision: () => readRevision(url, cfg.version_check),
         deploymentId: run.deployment_id,
-        cases,
+        cases: runnable,
         retries: cfg.suite.retries,
         concurrency: cfg.suite.concurrency,
         signal: ac.signal,
@@ -301,9 +334,12 @@ export class JobWorker {
         runDirKey = `${run.tenant_id}/${project.id}/${basename(runDir)}`;
         await uploadDir(store, runDir, runDirKey);
       } else runDirKey = runDir;
+    } catch (e) {
+      if (!(e instanceof NothingToRun)) throw e;
     } finally {
       clearInterval(poll);
     }
+    results = [...results, ...heldResults];
 
     await this.db.tx(async (c) => {
       const cur = (await c.query<RunRow>('select * from runs where id=$1 for update', [run.id])).rows[0]!;
@@ -370,6 +406,8 @@ export class JobWorker {
         required.map((r) => ({ scenario_id: r.scenario_id, execution_profile: r.execution_profile, verdict: r.verdict, critical: r.critical, required: true })),
       );
       for (const r of required.filter((x) => x.cleanup.status === 'failed')) gate.reasons.push(`${r.scenario_id}@${r.execution_profile}: cleanup failed`);
+      // Fresh passing results never erase an uncertain effect left by an earlier fence or attempt.
+      for (const x of await outstandingObligations(c, run.deployment_id, { includeLive: false })) gate.reasons.push(describeObligation(x));
       const eligible = gate.reasons.length === 0;
       const failing = required.filter((r) => r.verdict !== 'PASS').length;
       await c.query(`update runs set gate=$2, updated_at=now() where id=$1`, [run.id, JSON.stringify({ eligible, reasons: gate.reasons })]);
@@ -451,3 +489,6 @@ export function statusFor(run: RunRow): { state: 'pending' | 'success' | 'failur
       return { state: 'pending', description: `QA ${run.state.toLowerCase().replace('_', ' ')}` };
   }
 }
+
+/** Every case of a shard is held by an unresolved obligation; nothing is executed. */
+class NothingToRun extends Error {}

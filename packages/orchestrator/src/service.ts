@@ -7,6 +7,8 @@ import type { ArtifactStore } from '@qa/evidence';
 import type { BaselineStore, VisualReviewer } from '@qa/quality';
 import type { SystemOneProvider } from '@qa/s1';
 import { loadSuite, selectFullSuite, type LoadedSuite } from './suite.ts';
+import { describeObligation, OBLIGATION_PREFIX, outstandingObligations } from './intents.ts';
+import { validateAdjudication, type Adjudication, type IntentRecord } from '@qa/worker';
 import { ApiError, canSeeProject, requireRole, type Principal, type ProjectRow, type RunRow } from './types.ts';
 import { checkCandidateUrl, type Resolver } from './url-policy.ts';
 
@@ -302,9 +304,45 @@ export class Orchestrator {
       const suite = await loadSuite(project.config, this.deps.suiteBaseDir).catch(() => null);
       if (!suite || suite.revision !== run.suite_revision) reasons.push('suite or policy changed since the run; results are stale');
       if (run.state !== 'COMPLETED') reasons.push(`run ${run.id} is ${run.state}`);
-      else if (!run.gate?.eligible) reasons.push(...(run.gate?.reasons ?? ['gate held']));
+      // Obligations recorded at aggregation are re-evaluated live below (an adjudication resolves them); everything else stands.
+      else if (!run.gate?.eligible) reasons.push(...(run.gate?.reasons ?? ['gate held']).filter((r) => !r.startsWith(OBLIGATION_PREFIX)));
+    }
+    // Re-checked live: an obligation left by any run of this deployment holds promotion until it is resolved or adjudicated.
+    for (const x of await outstandingObligations(this.db, current.id, { includeLive: true })) {
+      const why = describeObligation(x);
+      if (!reasons.includes(why)) reasons.push(why);
     }
     return { eligible: reasons.length === 0, run_id: run?.id ?? null, reasons };
+  }
+
+  /** Effect obligations still open for a run's deployment (what holds its gate), for operators to adjudicate. */
+  async obligations(p: Principal, runId: string) {
+    const run = await this.visibleRun(p, runId);
+    return outstandingObligations(this.db, run.deployment_id, { includeLive: true });
+  }
+
+  /**
+   * Record an authorized decision about an effect the system could not verify
+   * (NEEDS_REVIEW). It resolves the obligation only; the held case is not
+   * re-run until someone retries the run, and the decision is audited.
+   */
+  async adjudicateIntent(p: Principal, intentId: string, a: { resolution: string; note: string }) {
+    requireRole(p, 'admin');
+    return this.db.tx(async (c) => {
+      const row = (await c.query<{ intent_id: string; tenant_id: string; run_id: string; state: string; effect: string; adjudication: unknown }>('select intent_id, tenant_id, run_id, state, effect, adjudication from action_intents where intent_id=$1 for update', [intentId])).rows[0];
+      const run = row ? await c.query<{ project_id: string }>('select project_id from runs where id=$1', [row.run_id]).then((r) => r.rows[0]) : undefined;
+      if (!row || !run || !canSeeProject(p, { tenant_id: row.tenant_id, id: run.project_id })) throw new ApiError(404, 'not_found', 'intent not found');
+      const adjudication: Adjudication = { resolution: a.resolution as Adjudication['resolution'], by: p.actor, note: a.note };
+      try {
+        validateAdjudication({ ...row, adjudication: row.adjudication } as unknown as IntentRecord, intentId, adjudication);
+      } catch (e) {
+        throw new ApiError(409, 'not_adjudicable', (e as Error).message);
+      }
+      const recorded = { ...adjudication, at: new Date().toISOString() };
+      await c.query('update action_intents set adjudication=$2, updated_at=now() where intent_id=$1', [intentId, JSON.stringify(recorded)]);
+      await this.audit(c, p, 'intent.adjudicate', intentId, recorded as unknown as Record<string, unknown>);
+      return { intent_id: intentId, adjudication: recorded };
+    });
   }
 
   /**

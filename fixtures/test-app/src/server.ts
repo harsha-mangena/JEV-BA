@@ -17,10 +17,19 @@ export interface FixtureAppOptions {
   checkoutDelayMs?: number;
 }
 
+/** Latencies a test can change while the app runs, to hold a worker inside a precise window. */
+export interface FixtureControl {
+  /** Before answering /__qa/effects (holds a worker between acknowledgement and confirmation). */
+  effectsDelayMs: number;
+  /** Before deleting a note (holds an unkeyed deletion in flight). */
+  noteDeleteDelayMs: number;
+}
+
 export interface FixtureApp {
   url: string;
   store: Store;
   defects: Set<DefectId>;
+  control: FixtureControl;
   close(): Promise<void>;
 }
 
@@ -90,6 +99,8 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
   const bumpCart = (userId: string) => cartVersions.delete(userId);
   /** Idempotency keys of checkout requests still being processed (effect lookups report them as in flight). */
   const inFlight = new Map<string, number>();
+  const control: FixtureControl = { effectsDelayMs: 0, noteDeleteDelayMs: 0 };
+  const cartAdds = new Map<string, { kind: string; entity_id: string; owner: string; idempotency_key: string; created_at: string }>();
 
   const defectCss = () =>
     [
@@ -124,8 +135,12 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     if (!tokenMatches(Array.isArray(header) ? header[0] : header, opts.fixtureToken)) return sendJson(res, 401, { error: 'fixture token required' });
     const m = req.method ?? 'GET';
     if (m === 'GET' && path === '/__qa/effects') {
+      if (control.effectsDelayMs) await sleep(control.effectsDelayMs);
       const key = new URL(req.url ?? '/', 'http://x').searchParams.get('key') ?? '';
-      const effects = [...store.orders.values()].filter((o) => key && o.idempotency_key === key).map((o) => ({ kind: 'order', entity_id: o.id, owner: o.customer_id, idempotency_key: o.idempotency_key, created_at: o.created_at }));
+      const effects = [
+        ...[...store.orders.values()].filter((o) => key && o.idempotency_key === key).map((o) => ({ kind: 'order', entity_id: o.id, owner: o.customer_id, idempotency_key: o.idempotency_key, created_at: o.created_at })),
+        ...(key && cartAdds.has(key) ? [cartAdds.get(key)!] : []),
+      ];
       return sendJson(res, 200, { effects, in_flight: inFlight.get(key) ?? 0 });
     }
     if (m === 'GET' && path === '/__qa/version') return sendJson(res, 200, { commit_sha: revision, defects: [...defects].sort() });
@@ -229,6 +244,10 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     if (method === 'POST' && path === '/cart/add') {
       const productId = (await form(req)).get('product_id') ?? '';
       if (!PRODUCTS.some((p) => p.id === productId)) return page(res, 400, 'Products', user, `<p role="alert">Unknown product.</p>${v.productsPage()}`);
+      // Test integration: a keyed add is recorded once under its key, so a replay adds nothing and recovery can look it up.
+      const idemKey = (req.headers['x-qa-idempotency-key'] as string | undefined) ?? null;
+      if (idemKey && cartAdds.has(idemKey)) return redirect(res, '/cart');
+      if (idemKey) cartAdds.set(idemKey, { kind: 'cart_add', entity_id: `cart:${user.id}:${productId}`, owner: user.id, idempotency_key: idemKey, created_at: new Date().toISOString() });
       const lines = store.carts.get(user.id) ?? [];
       const line = lines.find((l) => l.product_id === productId);
       if (line) line.quantity += 1;
@@ -281,6 +300,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       if (!canWrite) return notesView(403, { error: 'You do not have permission to change notes.' });
       if (method === 'GET' && mm[2] === '/edit') return page(res, 200, 'Edit note', user, v.editNotePage(note));
       if (method === 'POST' && mm[2] === '/delete') {
+        if (control.noteDeleteDelayMs) await sleep(control.noteDeleteDelayMs);
         if (!has('note_delete_ignored')) store.notes.delete(note.id);
         return redirect(res, '/notes?flash=Note+deleted.');
       }
@@ -332,6 +352,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     url: `http://${opts.host ?? '127.0.0.1'}:${port}`,
     store,
     defects,
+    control,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.closeAllConnections();
