@@ -49,3 +49,4 @@ export function validateS2Proposal(raw: unknown, obs: Observation): S2Validation
   return { ok: true, proposal: p };
 }
 export * from './anthropic.ts';
+export * from './reviewer.ts';

@@ -15,6 +15,7 @@
     "@qa/coverage": "*",
     "@qa/evidence": "*",
     "@qa/quality": "*",
+    "@qa/s2": "*",
     "@qa/s1": "*"
   }
 }

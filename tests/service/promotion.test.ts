@@ -134,3 +134,26 @@ describe.skipIf(!DATABASE_URL)('execution snapshot, lineage and promotion (compl
     expect(after.every((s) => s.state === 'success')).toBe(true);
   });
 });
+
+describe.skipIf(!DATABASE_URL)('budget separation (completion phase 9)', () => {
+  it('the required gate is aggregated without waiting for advisory exploration', async () => {
+    const cfg = projectConfig({ suite: { specs_dir: 'specs', policy_file: 'specs/policies/fixture-shop.yaml', fixture_catalog: 'specs/fixtures.yaml', profiles: ['chromium_desktop'], scenarios: ['sign_in', 'checkout_exploration'], shards: 1, concurrency: 1, signed_out_path: '/login' } });
+    const h = await harness({ config: cfg, outDir: await mkdtemp(join(tmpdir(), 'qa-bud-')) });
+    open.push(h);
+    const { KeywordProvider } = await import('@qa/s1');
+    const worker = new JobWorker(h.orch, { outDir: await mkdtemp(join(tmpdir(), 'qa-bud-')), env: h.env, exploration: { s1: new KeywordProvider(() => []), model: 'm' } });
+    const a = await app(SHA_A);
+    const run = await deploy(h, 'd-1', SHA_A, a.url);
+    await worker.processOne(); // readiness → one required shard + one advisory shard
+    const kinds = async () => (await h.db.query<{ kind: string; advisory: boolean; state: string }>(`select kind, coalesce((payload->>'advisory')::boolean, false) advisory, state from jobs where run_id=$1 order by id`, [run])).rows;
+    expect((await kinds()).filter((j) => j.kind === 'execute_shard').map((j) => j.advisory)).toEqual([false, true]);
+    await worker.processOne(); // the required shard
+    const after = await kinds();
+    expect(after.find((j) => j.kind === 'aggregate')).toBeDefined();
+    expect(after.find((j) => j.advisory)!.state).toBe('queued');
+    await worker.drain();
+    const r = (await call(h, 'GET', `/v1/runs/${run}`, undefined, h.tokens.viewer)).json();
+    expect(r.run.state).toBe('COMPLETED');
+    expect(r.run.gate).toEqual({ eligible: true, reasons: [] });
+  });
+});

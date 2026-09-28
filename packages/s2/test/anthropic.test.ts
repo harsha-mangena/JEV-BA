@@ -71,3 +71,14 @@ describe('Anthropic vision System Two', () => {
     expect(AnthropicVisionS2Provider.toProposal({ kind: 'PROPOSE_SUBGOAL', node_id: '', need: 'none', subgoal: 'Open the cart', evidence_refs: [], reason: 'r' })).toEqual({ kind: 'PROPOSE_SUBGOAL', subgoal: 'Open the cart', evidence_refs: [], reason: 'r' });
   });
 });
+
+describe('Anthropic visual reviewer', () => {
+  it('sends baseline, candidate and diff images and returns an advisory classification', async () => {
+    const { AnthropicVisualReviewer } = await import('../src/index.ts');
+    const { client, seen } = await fake(() => ({ json: message(JSON.stringify({ classification: 'regression', rationale: 'The header colour changed.' })) }));
+    const r = await new AnthropicVisualReviewer({ client }).review({ baseline: Buffer.from('a'), candidate: Buffer.from('b'), diff: Buffer.from('c'), checkpoint: 'cart', scenario_id: 's' });
+    expect(r).toEqual({ classification: 'regression', rationale: 'The header colour changed.' });
+    const content = (seen[0]!.messages as Array<{ content: Array<{ type: string }> }>)[0]!.content;
+    expect(content.filter((b) => b.type === 'image')).toHaveLength(3);
+  });
+});

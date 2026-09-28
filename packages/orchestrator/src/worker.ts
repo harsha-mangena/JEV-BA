@@ -266,7 +266,7 @@ export class JobWorker {
     const ledger = new FindingLedger();
     try {
       const { report, runDir } = await runSuite({
-        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha },
+        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha, ...(this.orch.deps.visualReviewer ? { reviewer: this.orch.deps.visualReviewer } : {}) },
         scenarios: suite.scenarios.filter((s) => cases.some((c) => c.scenario_id === s.id)),
         policy: suite.policy,
         baseUrl: url,
@@ -334,7 +334,8 @@ export class JobWorker {
   /** When no shard of this attempt is still pending, schedule exactly one aggregation. */
   private async settleShard(c: pg.PoolClient, runId: string, attempt: number): Promise<void> {
     await c.query('select id from runs where id=$1 for update', [runId]);
-    const pending = await c.query(`select 1 from jobs where run_id=$1 and kind='execute_shard' and (payload->>'attempt')::int=$2 and state in ('queued','leased')`, [runId, attempt]);
+    // Budget separation: advisory exploration never delays or blocks the required gate.
+    const pending = await c.query(`select 1 from jobs where run_id=$1 and kind='execute_shard' and (payload->>'attempt')::int=$2 and state in ('queued','leased') and coalesce((payload->>'advisory')::boolean, false) = false`, [runId, attempt]);
     if ((pending.rowCount ?? 0) > 0) return;
     const existing = await c.query(`select 1 from jobs where run_id=$1 and kind='aggregate' and (payload->>'attempt')::int=$2`, [runId, attempt]);
     if ((existing.rowCount ?? 0) > 0) return;

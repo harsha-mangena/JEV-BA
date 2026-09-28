@@ -1,3 +1,4 @@
+import { AnthropicVisualReviewer } from '@qa/s2';
 import { readFileSync } from 'node:fs';
 import type { Db } from '@qa/db';
 import { FsArtifactStore, S3ArtifactStore, type ArtifactStore } from '@qa/evidence';
@@ -69,6 +70,8 @@ export function depsFromEnv(db: Db, env: NodeJS.ProcessEnv = process.env): Orche
   return {
     ...(artifacts ? { artifacts, baselinesFor: (p: ProjectRow) => new ArtifactBaselineStore(artifacts, `baselines/${p.tenant_id}/${p.id}`) } : {}),
     s1For: tenantProviderFactory(db),
+    // QA_VISUAL_REVIEWER=anthropic attaches an advisory Claude reviewer to failed visual comparisons.
+    ...(env.QA_VISUAL_REVIEWER === 'anthropic' ? { visualReviewer: new AnthropicVisualReviewer(env.QA_S2_MODEL ? { model: env.QA_S2_MODEL } : {}) } : {}),
     select: impactSelector({
       baseDir,
       diffFor: (ctx) => (env.QA_REPO_DIR ? new GitDiffProvider(env.QA_REPO_DIR) : ctx.project.repository_full_name ? new GitHubDiffProvider(clientFor(ctx.project), ctx.project.repository_full_name) : null),

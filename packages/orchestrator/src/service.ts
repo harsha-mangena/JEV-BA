@@ -4,7 +4,7 @@ import { executionDedupKey, ProjectConfig, parseWith, requiredCheckContext, type
 import type { Db } from '@qa/db';
 import { DeploymentVerificationError, type DeploymentClaim, type DeploymentVerifier, type StatusPublisher } from '@qa/integrations';
 import type { ArtifactStore } from '@qa/evidence';
-import type { BaselineStore } from '@qa/quality';
+import type { BaselineStore, VisualReviewer } from '@qa/quality';
 import type { SystemOneProvider } from '@qa/s1';
 import { loadSuite, selectFullSuite, type LoadedSuite } from './suite.ts';
 import { ApiError, canSeeProject, requireRole, type Principal, type ProjectRow, type RunRow } from './types.ts';
@@ -33,6 +33,8 @@ export interface OrchestratorDeps {
   artifacts?: ArtifactStore;
   /** Visual baseline store per project. */
   baselinesFor?(project: ProjectRow): BaselineStore;
+  /** Advisory vision reviewer attached to failed visual comparisons (never approves). */
+  visualReviewer?: VisualReviewer;
   /** Wraps the exploration S1 provider per tenant (quotas, circuit breaking). */
   s1For?(tenantId: string, inner: SystemOneProvider): SystemOneProvider;
 }

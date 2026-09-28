@@ -1,0 +1,88 @@
+{
+  "cases": 13,
+  "caught": 13,
+  "recall": 1,
+  "mean_selected_fraction": 0.7788461538461539,
+  "full_suite_cases": 3,
+  "missed": [],
+  "per_case": [
+    {
+      "defect": "checkout_double_submit",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "total_off_by_one",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "validation_bypass",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "confirmation_missing",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "note_delete_ignored",
+      "caught": true,
+      "selected": 5,
+      "full_suite": false
+    },
+    {
+      "defect": "role_escalation",
+      "caught": true,
+      "selected": 5,
+      "full_suite": false
+    },
+    {
+      "defect": "preference_not_persisted",
+      "caught": true,
+      "selected": 5,
+      "full_suite": false
+    },
+    {
+      "defect": "cart_console_error",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "checkout_button_disabled",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    },
+    {
+      "defect": "mobile_horizontal_overflow",
+      "caught": true,
+      "selected": 8,
+      "full_suite": true
+    },
+    {
+      "defect": "focus_outline_removed",
+      "caught": true,
+      "selected": 8,
+      "full_suite": true
+    },
+    {
+      "defect": "header_restyled",
+      "caught": true,
+      "selected": 8,
+      "full_suite": true
+    },
+    {
+      "defect": "address_label_missing",
+      "caught": true,
+      "selected": 6,
+      "full_suite": false
+    }
+  ]
+}

@@ -28,7 +28,12 @@ export interface BaselineRecord {
 
 export interface BaselineStore {
   get(key: BaselineKey): Promise<{ record: BaselineRecord; png: Buffer } | null>;
-  approve(key: BaselineKey, candidate: Buffer, approval: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string }): Promise<BaselineRecord>;
+  /**
+   * Approve `candidate` as the next version. `expected_version` is the baseline
+   * version the reviewer compared against (0 when there was none); if another
+   * approval landed since, the call fails with BaselineConflict (compare-and-set).
+   */
+  approve(key: BaselineKey, candidate: Buffer, approval: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string; expected_version: number }): Promise<BaselineRecord>;
   list(): Promise<BaselineRecord[]>;
 }
 
@@ -60,16 +65,20 @@ export class FsBaselineStore implements BaselineStore {
     }
   }
 
-  async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string }): Promise<BaselineRecord> {
+  async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string; expected_version: number }): Promise<BaselineRecord> {
     if (!a.approved_by.trim()) throw new Error('approval requires an approver');
     if (!/^[0-9a-f]{40}$/.test(a.commit_sha)) throw new Error('approval must be tied to a full commit SHA');
     if (sha256(candidate) !== a.expected_sha256) throw new Error('candidate image does not match the checksum recorded in run evidence');
     const png = PNG.sync.read(candidate);
     const prev = await this.get(key);
-    const version = (prev?.record.version ?? 0) + 1;
+    if ((prev?.record.version ?? 0) !== a.expected_version) throw new BaselineConflict(`baseline is at version ${prev?.record.version ?? 0}, not ${a.expected_version}; review the current baseline first`);
+    const version = a.expected_version + 1;
     const b = this.base(key);
     await mkdir(b, { recursive: true });
-    await writeFile(join(b, `v${version}.png`), candidate);
+    // Exclusive create claims the version: a concurrent approval of the same version fails here.
+    await writeFile(join(b, `v${version}.png`), candidate, { flag: 'wx' }).catch((e: NodeJS.ErrnoException) => {
+      throw e.code === 'EEXIST' ? new BaselineConflict(`version ${version} was approved concurrently`) : e;
+    });
     const record: BaselineRecord = { key, sha256: a.expected_sha256, width: png.width, height: png.height, approved_by: a.approved_by, approved_at: new Date().toISOString(), commit_sha: a.commit_sha, deployment_id: a.deployment_id ?? null, source: a.source, version };
     await writeFile(join(b, `v${version}.json`), JSON.stringify(record, null, 2));
     await writeFile(join(b, 'current.json'), JSON.stringify(record, null, 2));
@@ -89,11 +98,47 @@ export class FsBaselineStore implements BaselineStore {
   }
 }
 
-/** Pinned rendering identity: baselines never compare across browsers, versions or OSes. */
-export function renderingProfile(page: Page): string {
+/**
+ * Pinned rendering identity: a digest of everything that changes pixels for
+ * identical markup — browser and version, OS, viewport, device scale factor,
+ * locale, timezone, colour scheme, reduced motion and a font/rasterizer probe.
+ * Baselines never compare across rendering identities; a new identity has no
+ * baseline and goes to review instead of producing a spurious diff.
+ */
+export async function renderingProfile(page: Page): Promise<string> {
   const browser = page.context().browser();
-  return `${browser?.browserType().name() ?? 'unknown'}-${browser?.version() ?? 'unknown'}-${process.platform}`;
+  const env = await page
+    .evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 240;
+      c.height = 40;
+      const g = c.getContext('2d');
+      let probe = 'no-canvas';
+      if (g) {
+        g.textBaseline = 'top';
+        g.font = '16px sans-serif';
+        g.fillText('Rendering probe 0123 ÅgÿÉ', 2, 2);
+        g.font = '16px serif';
+        g.fillText('Rendering probe', 2, 20);
+        probe = c.toDataURL();
+      }
+      return {
+        viewport: [innerWidth, innerHeight],
+        dpr: devicePixelRatio,
+        locale: navigator.language,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        dark: matchMedia('(prefers-color-scheme: dark)').matches,
+        reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        probe,
+      };
+    })
+    .catch(() => null);
+  const digest = createHash('sha256').update(JSON.stringify(env)).digest('hex').slice(0, 12);
+  return `${browser?.browserType().name() ?? 'unknown'}-${browser?.version() ?? 'unknown'}-${process.platform}-r${digest}`;
 }
+
+/** Another approval changed the baseline since the reviewer saw it (compare-and-set failure). */
+export class BaselineConflict extends Error {}
 
 /** Wait for a stable view, then capture with animations disabled, caret hidden and declared regions masked. */
 export async function captureCheckpoint(page: Page, mask: PwLocator[], fullPage: boolean): Promise<Buffer> {
@@ -141,7 +186,7 @@ export function compareImages(baseline: Buffer, candidate: Buffer, threshold = 0
 }
 
 /** Copy an approved candidate into a store from run evidence (CLI/API helper). */
-export async function approveFromEvidence(store: BaselineStore, key: BaselineKey, candidatePath: string, expectedSha: string, approval: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string }): Promise<BaselineRecord> {
+export async function approveFromEvidence(store: BaselineStore, key: BaselineKey, candidatePath: string, expectedSha: string, approval: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_version: number }): Promise<BaselineRecord> {
   await stat(candidatePath);
   return store.approve(key, await readFile(candidatePath), { ...approval, expected_sha256: expectedSha });
 }
@@ -171,13 +216,15 @@ export class ArtifactBaselineStore implements BaselineStore {
     return { record, png };
   }
 
-  async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string }): Promise<BaselineRecord> {
+  async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string; expected_version: number }): Promise<BaselineRecord> {
     if (!a.approved_by.trim()) throw new Error('approval requires an approver');
     if (!/^[0-9a-f]{40}$/.test(a.commit_sha)) throw new Error('approval must be tied to a full commit SHA');
     if (sha256(candidate) !== a.expected_sha256) throw new Error('candidate image does not match the checksum recorded in run evidence');
     const png = PNG.sync.read(candidate);
     const prev = await this.get(key);
-    const version = (prev?.record.version ?? 0) + 1;
+    if ((prev?.record.version ?? 0) !== a.expected_version) throw new BaselineConflict(`baseline is at version ${prev?.record.version ?? 0}, not ${a.expected_version}; review the current baseline first`);
+    if (await this.store.get(`${this.base(key)}/v${a.expected_version + 1}.json`)) throw new BaselineConflict(`version ${a.expected_version + 1} was approved concurrently`);
+    const version = a.expected_version + 1;
     const record: BaselineRecord = { key, sha256: a.expected_sha256, width: png.width, height: png.height, approved_by: a.approved_by, approved_at: new Date().toISOString(), commit_sha: a.commit_sha, deployment_id: a.deployment_id ?? null, source: a.source, version };
     await this.store.put(`${this.base(key)}/v${version}.png`, candidate, 'image/png');
     await this.store.put(`${this.base(key)}/v${version}.json`, Buffer.from(JSON.stringify(record, null, 2)), 'application/json');
