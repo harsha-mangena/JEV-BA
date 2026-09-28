@@ -1,0 +1,10 @@
+.git
+node_modules
+**/node_modules
+.qa-work
+.qa-runs
+test-results
+evidence/lanes
+*.log
+.env
+.env.*

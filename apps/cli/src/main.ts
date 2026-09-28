@@ -58,7 +58,8 @@ Service commands (need DATABASE_URL):
   bootstrap                Create/update a tenant and project; mint tokens (--tenant --project --config
                            [--repository-id --repository --webhook-secret-env --installation-id] [--token role:label]...)
   serve-api                Run the control API (--port).
-  serve-worker             Run a job worker (--out).
+  serve-worker             Run a job worker (--out). Both servers refuse to start when a startup check fails.
+  doctor                   Run the startup checks for --role api|worker and exit non-zero on any failure.
 
 System One:
   s1 probe                 Validate the live provider contract (QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL, QA_S1_API_KEY).
@@ -136,6 +137,7 @@ const { positionals, values } = parseArgs({
     provider: { type: 'string' },
     'candidate-url': { type: 'string' },
     'run-id': { type: 'string' },
+    role: { type: 'string' },
     timeout: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -267,6 +269,8 @@ async function main(): Promise<number> {
       return svc.migrate();
     case 'bootstrap':
       return svc.bootstrap(values);
+    case 'doctor':
+      return svc.doctor(values);
     case 'serve-api':
       return svc.serveApi(values);
     case 'serve-worker':

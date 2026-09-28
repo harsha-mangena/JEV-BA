@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { buildApi } from '@qa/api';
 import { Db } from '@qa/db';
-import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
+import { bootstrapProject, checkStartup, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
 import { CalibrationRegistry, withCalibration } from '@qa/calibration';
 import { HEURISTIC_GATE_V0, type AutonomyMode } from '@qa/gate';
 import { AnthropicVisionS2Provider } from '@qa/s2';
@@ -63,10 +63,43 @@ export async function bootstrap(a: ServiceArgs): Promise<number> {
   }
 }
 
+/** Run the startup checks for a role; print them and return whether the process may start. */
+async function startupGate(role: 'api' | 'worker', db: Db, orch: Orchestrator): Promise<boolean> {
+  const s1 = role === 'worker' ? s1FromEnv() : null;
+  const checks = await checkStartup(db, orch, {
+    role,
+    env: process.env,
+    ...(role === 'worker' ? { launchBrowser: async () => (await import('@qa/browser')).launchBrowser() } : {}),
+    ...(s1 ? { probeS1: async () => {
+      const r = await probeProvider(s1.provider, s1.endpoint, s1.model);
+      return { ok: r.ok, detail: r.ok ? `resolved ${r.resolved_model}` : r.error ?? JSON.stringify(r.invalid_heads) };
+    } } : {}),
+  });
+  for (const c of checks) console.log(`${c.ok ? 'ok  ' : 'FAIL'} ${c.name}: ${c.detail}`);
+  return checks.every((c) => c.ok);
+}
+
+/** Validate configuration for a role without starting it (`qa doctor --role api|worker`). */
+export async function doctor(a: ServiceArgs): Promise<number> {
+  const role = (a.role as string) ?? 'worker';
+  if (role !== 'api' && role !== 'worker') throw new UsageError('--role must be api or worker');
+  const db = dbFromEnv();
+  try {
+    return (await startupGate(role, db, new Orchestrator(depsFromEnv(db)))) ? 0 : 1;
+  } finally {
+    await db.close();
+  }
+}
+
 export async function serveApi(a: ServiceArgs): Promise<number> {
   const db = dbFromEnv();
   await db.migrate();
   const orch = new Orchestrator(depsFromEnv(db));
+  if (!(await startupGate('api', db, orch))) {
+    await db.close();
+    console.error('refusing to start: fix the failing checks above');
+    return 1;
+  }
   const { registerServiceRoutes } = await import('@qa/api');
   const app = await buildApi(orch, { logger: true, extend: registerServiceRoutes });
   await app.listen({ port: Number(a.port ?? process.env.PORT ?? 8080), host: (a.host as string) ?? '0.0.0.0' });
@@ -79,8 +112,13 @@ export async function serveApi(a: ServiceArgs): Promise<number> {
 export async function serveWorker(a: ServiceArgs): Promise<number> {
   const db = dbFromEnv();
   const orch = new Orchestrator(depsFromEnv(db));
+  if (!(await startupGate('worker', db, orch))) {
+    await db.close();
+    console.error('refusing to start: fix the failing checks above');
+    return 1;
+  }
   const exploration = await explorationFromEnv();
-  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m), ...(exploration ? { exploration } : {}) });
+  const worker = new JobWorker(orch, { outDir: (a.out as string) ?? '.qa-runs', log: (m) => console.log(m), ...(process.env.QA_LEASE_SECONDS ? { leaseSeconds: Number(process.env.QA_LEASE_SECONDS) } : {}), ...(process.env.QA_SWEEP_INTERVAL_MS ? { sweepIntervalMs: Number(process.env.QA_SWEEP_INTERVAL_MS) } : {}), ...(exploration ? { exploration } : {}) });
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => worker.stop());
   await worker.run();
   await db.close();

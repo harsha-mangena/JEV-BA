@@ -161,3 +161,29 @@ describe.skipIf(!DATABASE_URL)('durable execution (completion phase 2)', () => {
     );
   });
 });
+
+describe.skipIf(!DATABASE_URL)('operations (completion phase 10)', () => {
+  it('startup checks pass on a configured service and fail closed on a missing fixture token', async () => {
+    const { checkStartup } = await import('@qa/orchestrator');
+    const h = await setup(['sign_in']);
+    const ok = await checkStartup(h.db, h.orch, { role: 'worker', env: h.env, launchBrowser: async () => ({ close: async () => undefined }) });
+    expect(ok.filter((c) => !c.ok), JSON.stringify(ok)).toEqual([]);
+    expect(ok.map((c) => c.name)).toEqual(expect.arrayContaining(['database', 'migrations', 'project:shop:suite', 'project:shop:fixture_token', 'browser']));
+    const { QA_FIXTURE_TOKEN_SHOP: _drop, ...noToken } = h.env;
+    const bad = await checkStartup(h.db, h.orch, { role: 'worker', env: { ...noToken, QA_AUTONOMY_MODE: 'yolo', QA_S1_PROVIDER: 'typesafe' }, launchBrowser: async () => Promise.reject(new Error('no chromium')) });
+    expect(bad.filter((c) => !c.ok).map((c) => c.name).sort()).toEqual(['autonomy_mode', 'browser', 'project:shop:fixture_token', 's1_probe']);
+  });
+
+  it('exposes metrics only to the configured scrape token', async () => {
+    const h = await harness({ config: suite(['sign_in']), outDir: await mkdtemp(join(tmpdir(), 'qa-met-')), api: { env: { ...process.env, QA_METRICS_TOKEN: 'metrics-token-0123456789' } } });
+    open.push(h);
+    await h.db.query(`insert into jobs(tenant_id, kind, state, lease_owner, lease_expires_at) values ('acme','noop','leased','dead', now() - interval '1 minute')`);
+    expect((await h.api.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(401);
+    const r = await h.api.inject({ method: 'GET', url: '/metrics', headers: { authorization: 'Bearer metrics-token-0123456789' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toMatch(/^qa_jobs_expired_leases 1$/m);
+    expect(r.body).toMatch(/# TYPE qa_intents gauge/);
+    const off = await setup(['sign_in']);
+    expect((await off.api.inject({ method: 'GET', url: '/metrics', headers: { authorization: 'Bearer metrics-token-0123456789' } })).statusCode).toBe(404);
+  });
+});

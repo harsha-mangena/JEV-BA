@@ -43,3 +43,23 @@ jobs:
         with:
           name: lane-manifests
           path: evidence/lanes/*.json
+
+  deployment:
+    # Builds the service image and runs the unattended deployment flow
+    # (clean → promoted once, defective → held, worker SIGKILL → recovered).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: docker build -t jev-ba/qa:local .
+      - run: node deploy/demo/run-demo.mjs --out evidence/deployment
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-evidence
+          path: evidence/deployment/*.json

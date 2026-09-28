@@ -1,0 +1,20 @@
+# Demo project for the unattended deployment flow (deploy/demo/run-demo.mjs):
+# the fixture shop deployed as containers on the compose network.
+schema_version: 1
+environments:
+  staging:
+    url_patterns: ["http://fixture-clean:*", "http://fixture-defective:*", "http://127.0.0.1:*"]
+    allow_private_network: true
+version_check: { kind: json, path: /healthz, field: commit_sha }
+readiness: { timeout_seconds: 60, interval_seconds: 1 }
+suite:
+  specs_dir: specs
+  policy_file: specs/policies/fixture-shop.yaml
+  fixture_catalog: specs/fixtures.yaml
+  profiles: [chromium_desktop]
+  scenarios: [checkout_existing_customer, checkout_rejects_empty_address, notes_crud, settings_preference_persists, viewer_cannot_create_notes, sign_in]
+  shards: 2
+  concurrency: 2
+  signed_out_path: /login
+fixture_api: { token_env: QA_FIXTURE_TOKEN_SHOP }
+status: {}
