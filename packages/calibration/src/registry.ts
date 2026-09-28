@@ -120,6 +120,8 @@ export class CalibrationRegistry {
 export interface CalibratedScorer {
   version_id: string;
   decision_config_digest: string;
+  /** Resolved model the calibration was fitted for. */
+  model?: string;
   threshold: number;
   score(f: GateFeatures): number;
   supported(f: GateFeatures): boolean;
@@ -128,7 +130,7 @@ export interface CalibratedScorer {
 export function scorerFrom(v: CalibrationVersion): CalibratedScorer | null {
   if (v.threshold === null) return null;
   const supported = new Set(v.supported_cohorts);
-  return { version_id: v.id, decision_config_digest: v.decision_config_digest, threshold: v.threshold, score: (f) => predict(v.calibrator, f), supported: (f) => supported.has(cohortOf({ features: f })) };
+  return { version_id: v.id, decision_config_digest: v.decision_config_digest, model: v.decision_config.model, threshold: v.threshold, score: (f) => predict(v.calibrator, f), supported: (f) => supported.has(cohortOf({ features: f })) };
 }
 
 export interface CanaryResult {

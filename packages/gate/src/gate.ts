@@ -46,6 +46,7 @@ export interface GateConfig {
   calibrated?: {
     version_id: string;
     decision_config_digest: string;
+    model?: string;
     threshold: number;
     score(f: GateFeatures): number;
     supported(f: GateFeatures): boolean;

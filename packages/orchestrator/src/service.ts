@@ -35,6 +35,12 @@ export interface OrchestratorDeps {
   baselinesFor?(project: ProjectRow): BaselineStore;
   /** Advisory vision reviewer attached to failed visual comparisons (never approves). */
   visualReviewer?: VisualReviewer;
+  /**
+   * Calibration qualifications: calibrated autonomy runs only for a profile
+   * (project, environment, application contract, model) qualified for the
+   * calibration in use; otherwise exploration is downgraded to shadow mode.
+   */
+  qualifications?: { find(profile: { project_id: string; environment: string; application: string; resolved_model: string }, calibration: { id: string; decision_config_digest: string }): Promise<unknown | null> };
   /** Wraps the exploration S1 provider per tenant (quotas, circuit breaking). */
   s1For?(tenantId: string, inner: SystemOneProvider): SystemOneProvider;
 }

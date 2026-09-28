@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { CalibrationRegistry, calibrate, canary, DecisionConfig, extractDecisions, LabeledDecision } from '@qa/calibration';
+import { CalibrationRegistry, calibrate, canary, DecisionConfig, extractDecisions, LabeledDecision, qualify, QualificationRegistry, type CalibrationVersion, type QualificationEvidence } from '@qa/calibration';
 import { UsageError, type ServiceArgs } from './service.ts';
 
 async function readJsonl<T>(path: string, parse: (v: unknown) => T): Promise<T[]> {
@@ -46,4 +46,25 @@ export async function calibrateCmd(a: ServiceArgs): Promise<number> {
   console.log(`supported cohorts: ${v.supported_cohorts.join(', ') || 'none'}`);
   for (const l of v.report.limitations) console.log(`note: ${l}`);
   return 0;
+}
+
+/**
+ * Decide whether a calibration may drive calibrated autonomy for one profile
+ * and record the decision (`qa qualify`). Evidence file (JSON): { provider_compat,
+ * dataset: { source, applications, labeled_decisions, double_label_agreement },
+ * episodes: { attempted, verified_success, false_pass } }. Exit 0 only when qualified.
+ */
+export async function qualifyCmd(a: ServiceArgs): Promise<number> {
+  const need = (k: string) => {
+    const v = a[k];
+    if (typeof v !== 'string' || !v) throw new UsageError(`--${k} is required`);
+    return v;
+  };
+  const calibration = JSON.parse(await readFile(need('calibration'), 'utf8')) as CalibrationVersion;
+  const ev = JSON.parse(await readFile(need('evidence'), 'utf8')) as Omit<QualificationEvidence, 'calibration'>;
+  const record = qualify({ project_id: need('project'), environment: need('environment'), application: need('application'), resolved_model: calibration.decision_config.model }, { ...ev, calibration });
+  await new QualificationRegistry(need('qualifications')).save(record);
+  console.log(`${record.state}: ${record.id}`);
+  for (const r of record.reasons) console.log(`  - ${r}`);
+  return record.state === 'QUALIFIED_FOR_PROFILE' ? 0 : 1;
 }

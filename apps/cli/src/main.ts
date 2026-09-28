@@ -52,6 +52,8 @@ Calibration (Phase 8):
   evals extract            Export S1 decision records for labeling (--run <dir>... --app <id> --decision-config <file> [--labels out]).
   calibrate                Fit, select threshold, evaluate on grouped splits (--labels <jsonl> --target 0.99 [--registry dir]).
   evals canary             Check a candidate configuration's labeled replay against the current calibration (--labels).
+  qualify                  Qualify a calibration for one profile (--calibration <version.json> --evidence <json>
+                           --project --environment --application --qualifications <dir>); exit 0 only if qualified.
 
 Service commands (need DATABASE_URL):
   migrate                  Apply database migrations.
@@ -138,6 +140,10 @@ const { positionals, values } = parseArgs({
     'candidate-url': { type: 'string' },
     'run-id': { type: 'string' },
     role: { type: 'string' },
+    calibration: { type: 'string' },
+    evidence: { type: 'string' },
+    application: { type: 'string' },
+    qualifications: { type: 'string' },
     timeout: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -262,6 +268,8 @@ async function main(): Promise<number> {
       return evalsCmd.evals(positionals[1], values);
     case 'calibrate':
       return evalsCmd.calibrateCmd(values);
+    case 'qualify':
+      return evalsCmd.qualifyCmd(values);
     case 's1':
       if (positionals[1] === 'probe') return svc.s1Probe();
       fail('usage: qa s1 probe');

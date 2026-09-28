@@ -3,6 +3,7 @@ import type pg from 'pg';
 import { evaluateReleaseGate, type CaseResult, type ExecutionProfileId } from '@qa/contracts';
 import { FixtureClient } from '@qa/oracles';
 import { recoverIntents, runSuite, type ExplorationOptions } from '@qa/worker';
+import { autonomyMode, type GateConfig } from '@qa/gate';
 import { PgIntentStore } from './intents.ts';
 import { basename } from 'node:path';
 import { uploadDir } from '@qa/evidence';
@@ -284,7 +285,7 @@ export class JobWorker {
         intents,
         ...(readOnly ? { readOnly: true } : {}),
         ...(cfg.suite.signed_out_path ? { signedOutPath: cfg.suite.signed_out_path } : {}),
-        ...(advisory && this.o.exploration ? { exploration: { ...this.o.exploration, s1: this.orch.deps.s1For?.(run.tenant_id, this.o.exploration.s1) ?? this.o.exploration.s1 } } : {}),
+        ...(advisory && this.o.exploration ? { exploration: { ...this.o.exploration, s1: this.orch.deps.s1For?.(run.tenant_id, this.o.exploration.s1) ?? this.o.exploration.s1, gate: await this.qualifiedGate(project.id, run.environment, suite.policy.contract_version) } } : {}),
         hooks: {
           fixtureProvisioned: async (fixtureId) => {
             await this.db.query(`insert into cleanup_tasks(tenant_id, project_id, run_id, fixture_id, fixture_api_url) values ($1,$2,$3,$4,$5) on conflict (fixture_id) do nothing`, [run.tenant_id, project.id, run.id, fixtureId, cfg.fixture_api.url ?? url]);
@@ -329,6 +330,17 @@ export class JobWorker {
       }
       await this.settleShard(c, run.id, run.attempt);
     });
+  }
+
+  /** Calibrated autonomy only for a qualified profile; anything else is downgraded to shadow (decide, never act). */
+  private async qualifiedGate(projectId: string, environment: string, application: string): Promise<GateConfig | undefined> {
+    const gate = this.o.exploration?.gate;
+    if (!gate || autonomyMode(gate) !== 'calibrated') return gate;
+    const cal = gate.calibrated;
+    const q = cal && this.orch.deps.qualifications ? await this.orch.deps.qualifications.find({ project_id: projectId, environment, application, resolved_model: cal.model ?? '' }, { id: cal.version_id, decision_config_digest: cal.decision_config_digest }).catch(() => null) : null;
+    if (q) return gate;
+    this.log(`calibrated autonomy is not qualified for ${projectId}/${environment} (${application}); running exploration in shadow mode`);
+    return { ...gate, mode: 'shadow' };
   }
 
   /** When no shard of this attempt is still pending, schedule exactly one aggregation. */

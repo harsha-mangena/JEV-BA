@@ -1,3 +1,4 @@
+import { QualificationRegistry } from '@qa/calibration';
 import { AnthropicVisualReviewer } from '@qa/s2';
 import { readFileSync } from 'node:fs';
 import type { Db } from '@qa/db';
@@ -70,6 +71,7 @@ export function depsFromEnv(db: Db, env: NodeJS.ProcessEnv = process.env): Orche
   return {
     ...(artifacts ? { artifacts, baselinesFor: (p: ProjectRow) => new ArtifactBaselineStore(artifacts, `baselines/${p.tenant_id}/${p.id}`) } : {}),
     s1For: tenantProviderFactory(db),
+    ...(env.QA_QUALIFICATION_DIR ? { qualifications: new QualificationRegistry(env.QA_QUALIFICATION_DIR) } : {}),
     // QA_VISUAL_REVIEWER=anthropic attaches an advisory Claude reviewer to failed visual comparisons.
     ...(env.QA_VISUAL_REVIEWER === 'anthropic' ? { visualReviewer: new AnthropicVisualReviewer(env.QA_S2_MODEL ? { model: env.QA_S2_MODEL } : {}) } : {}),
     select: impactSelector({

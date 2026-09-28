@@ -157,3 +157,28 @@ describe.skipIf(!DATABASE_URL)('budget separation (completion phase 9)', () => {
     expect(r.run.gate).toEqual({ eligible: true, reasons: [] });
   });
 });
+
+describe.skipIf(!DATABASE_URL)('calibration qualification in the worker (completion phase 11)', () => {
+  it('runs calibrated exploration in shadow mode unless the profile is qualified', async () => {
+    const { withCalibration } = await import('@qa/calibration');
+    const { HEURISTIC_GATE_V0 } = await import('@qa/gate');
+    const { KeywordProvider } = await import('@qa/s1');
+    const cfg = projectConfig({ suite: { specs_dir: 'specs', policy_file: 'specs/policies/fixture-shop.yaml', fixture_catalog: 'specs/fixtures.yaml', profiles: ['chromium_desktop'], scenarios: ['sign_in', 'checkout_exploration'], shards: 1, concurrency: 1, signed_out_path: '/login' } });
+    const found: unknown[] = [];
+    const h = await harness({ config: cfg, outDir: await mkdtemp(join(tmpdir(), 'qa-q-')), deps: { qualifications: { find: async (p, c) => (found.push({ p, c }), null) } } });
+    open.push(h);
+    const calibration = { id: 'cal_x', created_at: '', decision_config: { model: 'jev-1.13.0', question_schema_version: 'q', extractor_version: 'e', policy_digest: 'p', candidate_filter_version: 'c', gate_version: 'g' }, decision_config_digest: 'dig', calibrator: { weights: [], bias: 0 }, threshold: 0.9, target_precision: 0.99, confidence: 0.95, supported_cohorts: [], report: {} } as never;
+    const gate = withCalibration({ ...HEURISTIC_GATE_V0, mode: 'calibrated' as const }, calibration);
+    const s1 = new KeywordProvider((_r, q) => (q.id === 'op' ? ['CLICK'] : q.id === 'click_target' ? ['"Place order"'] : []));
+    const worker = new JobWorker(h.orch, { outDir: await mkdtemp(join(tmpdir(), 'qa-q-')), env: h.env, exploration: { s1, model: 'jev-1.13.0', gate } });
+    const a = await app(SHA_A);
+    const run = await deploy(h, 'd-1', SHA_A, a.url);
+    await worker.drain();
+    expect(found).toEqual([{ p: { project_id: 'shop', environment: 'staging', application: 'fixture-shop/2', resolved_model: 'jev-1.13.0' }, c: { id: 'cal_x', decision_config_digest: 'dig' } }]);
+    const rows = (await h.db.query<{ result: { verdict: string; message: string; advisory: boolean } }>(`select result from case_results where run_id=$1`, [run])).rows.map((r) => r.result);
+    const exploration = rows.find((r) => r.advisory)!;
+    expect(exploration.verdict).toBe('NEEDS_REVIEW');
+    expect(exploration.message).toMatch(/shadow_mode/);
+    expect(a.store.writes.filter((w) => w.path === '/checkout')).toHaveLength(0);
+  });
+});
