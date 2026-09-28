@@ -1,5 +1,6 @@
 import {
   authorizeIntent,
+  type AuthorizationDecision,
   isTargeted,
   type GateFeatures,
   type GateOutcome,
@@ -70,7 +71,14 @@ export interface GateInput {
   s1: ValidationOutcome;
   target_keys: Record<string, Record<string, string>>;
   truncated_heads: string[];
-  binding: (op: Operation, nodeId: string | null) => ActionBinding;
+  /**
+   * Shared authorization service for the proposed action. `parameterRef`
+   * undefined = check the effect only (stage 2); a value = full check incl.
+   * parameter association (stage 3).
+   */
+  authorize?: (op: Operation, nodeId: string | null, parameterRef?: string | null) => AuthorizationDecision;
+  /** @deprecated trusted binding lookup; used only when `authorize` is absent. Unknown effects are always denied. */
+  binding?: (op: Operation, nodeId: string | null) => ActionBinding;
   freshness: (nodeId: string) => Promise<Freshness>;
   recent_no_effect: number;
   /**
@@ -139,24 +147,21 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
     if (!nodeId) return deny('ABSTAIN', ['target_key_unresolved'], { op });
   }
 
-  // 2. Permission, independent of any score.
-  const binding = g.binding(op, nodeId);
-  if (binding.risk_class === 'external_effect' && g.scenario_policy.external_effects !== 'sandbox_only') return deny('DENY', ['external_effect_not_permitted'], { op, node_id: nodeId });
-  if (binding.risk_class === 'unknown' && g.scenario_policy.unknown_actions === 'deny') return deny('DENY', ['unknown_action_semantics'], { op, node_id: nodeId });
-  if (binding.intent) {
-    const auth = authorizeIntent(g.project_policy, g.scenario_policy.mutations, g.environment, binding.intent);
-    if (!auth.allowed) return deny('DENY', ['mutation_not_authorized'], { op, node_id: nodeId });
-  } else if (binding.risk_class === 'test_owned_mutation') {
-    return deny('DENY', ['mutation_without_intent_binding'], { op, node_id: nodeId });
-  }
+  // 2. Permission, independent of any score. Unknown effects are denied; there is no opt-out.
+  const authorize = g.authorize ?? legacyAuthorize(g);
+  const effectAuth = authorize(op, nodeId);
+  if (!effectAuth.allowed) return deny('DENY', [effectAuth.code, ...(effectAuth.code === 'unknown_effect' ? ['unknown_action_semantics'] : [])], { op, node_id: nodeId });
 
-  // 3. Parameter resolution and candidate coverage.
+  // 3. Parameter resolution (and its association with the control) and candidate coverage.
   let parameterRef: string | null = null;
   if (op === 'TYPE') {
     const v = g.s1.answers.type_value;
     if (!v || v.selected === NONE) return deny(g.budget.s2_remaining > 0 ? 'ESCALATE' : 'ABSTAIN', ['no_valid_parameter'], { op, node_id: nodeId });
     parameterRef = v.selected;
+    const full = authorize(op, nodeId, parameterRef);
+    if (!full.allowed) return deny('DENY', [full.code], { op, node_id: nodeId });
   }
+  const binding = { risk_class: effectAuth.risk_class };
   if (isTargeted(op) && g.truncated_heads.includes(TARGET_HEAD[op])) reasons.push('candidates_truncated');
 
   // 4. Freshness and actionability.
@@ -212,4 +217,21 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
   }
   if (c.heuristic) reasons.push('heuristic_gate_uncalibrated');
   return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };
+}
+
+/** Compatibility for callers that still supply a role/name `binding`: same fail-closed semantics. */
+function legacyAuthorize(g: GateInput): (op: Operation, nodeId: string | null, parameterRef?: string | null) => AuthorizationDecision {
+  return (op, nodeId) => {
+    if (!isTargeted(op)) return { allowed: true, effect: 'none', intent: null, mutation: null, risk_class: 'read_only', binding: null };
+    const b = g.binding?.(op, nodeId) ?? { risk_class: 'unknown' as const };
+    if (b.risk_class === 'unknown') return { allowed: false, code: 'unknown_effect', reason: 'no trusted binding', effect: 'unknown', intent: null };
+    if (b.risk_class === 'external_effect' && g.scenario_policy.external_effects !== 'sandbox_only') return { allowed: false, code: 'external_effect_not_permitted', reason: 'external effect', effect: 'external', intent: b.intent ?? null };
+    if (b.risk_class === 'test_owned_mutation' && !b.intent) return { allowed: false, code: 'missing_intent', reason: 'mutation without intent binding', effect: 'mutation', intent: null };
+    if (b.intent) {
+      const a = authorizeIntent(g.project_policy, g.scenario_policy.mutations, g.environment, b.intent);
+      if (!a.allowed) return { allowed: false, code: 'mutation_not_authorized', reason: a.reason, effect: 'mutation', intent: b.intent };
+      return { allowed: true, effect: a.mutation ? 'mutation' : 'none', intent: b.intent, mutation: a.mutation ?? null, risk_class: b.risk_class, binding: null };
+    }
+    return { allowed: true, effect: 'none', intent: null, mutation: null, risk_class: b.risk_class, binding: null };
+  };
 }

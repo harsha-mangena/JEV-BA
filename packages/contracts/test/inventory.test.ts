@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -20,5 +20,9 @@ describe('acceptance inventory', () => {
       if (i.state !== 'IMPLEMENTATION_PENDING' && i.state !== 'BLOCKED') expect(i.tests.length, i.id).toBeGreaterThan(0);
       if (i.state === 'QUALIFIED_FOR_PROFILE') expect(i.external_prerequisite, i.id).toBeNull();
     }
+  });
+
+  it('references only test files that exist', () => {
+    for (const i of inv.items) for (const t of i.tests) expect(existsSync(join(import.meta.dirname, '../../..', t.split('#')[0]!)), `${i.id}: ${t}`).toBe(true);
   });
 });

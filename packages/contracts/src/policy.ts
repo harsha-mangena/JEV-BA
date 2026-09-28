@@ -8,6 +8,34 @@ import { RiskClass } from './decision.ts';
  */
 export const CANDIDATE_ORIGIN = '$candidate';
 
+export const ContractOperation = z.enum(['CLICK', 'TYPE', 'SELECT', 'PRESS']);
+export type ContractOperation = z.infer<typeof ContractOperation>;
+
+const ControlBindingSpec = z
+  .object({
+    role: z.string().min(1),
+    name: z.string().min(1).optional(),
+    name_pattern: z.string().min(1).optional(),
+    /** Route path(s) where this binding applies (`:param` segments allowed). Omitted = any route. */
+    route: z.union([z.string().startsWith('/'), z.array(z.string().startsWith('/')).min(1)]).optional(),
+    /** Accessible name of the enclosing form, if the binding is form-scoped. */
+    form: z.string().min(1).optional(),
+    /** Accessible name of the enclosing section/dialog, if section-scoped. */
+    section: z.string().min(1).optional(),
+    section_pattern: z.string().min(1).optional(),
+    operations: z.array(ContractOperation).min(1).optional(),
+    intent: z.string().min(1).optional(),
+    risk_class: RiskClass,
+    /** Parameter references this input accepts (`fixture.x`, `secret.x`, or `literal`). Required for TYPE/SELECT bindings. */
+    accepts: z.array(z.string().regex(/^(literal|fixture\.[a-z0-9_]+|secret\.[a-z0-9_]+)$/)).optional(),
+    /** Fixture roles allowed to use this control. Omitted = any role. */
+    roles: z.array(z.string().min(1)).optional(),
+  })
+  .strict()
+  .refine((b) => (b.name === undefined) !== (b.name_pattern === undefined), 'exactly one of name or name_pattern is required')
+  .refine((b) => b.risk_class !== 'test_owned_mutation' || b.intent !== undefined, 'a mutation binding requires an intent');
+export type ControlBindingSpec = z.output<typeof ControlBindingSpec>;
+
 export const ProjectPolicy = z
   .object({
     schema_version: z.literal(1),
@@ -25,28 +53,34 @@ export const ProjectPolicy = z
         })
         .strict(),
     ),
+    /** Version of the application contract (intents, routes, bindings); part of the execution identity. */
+    contract_version: z.string().min(1).default('unversioned'),
     /**
-     * Trusted semantics for observed controls, used by autonomous exploration.
-     * The model never decides what a control does; an unbound control has
-     * unknown risk and is denied unless the scenario allows read-only exploration.
+     * Registry of every action intent the application contract knows. Unknown
+     * intents are rejected, never treated as benign. `session` intents change
+     * authentication state only; `mutation` intents change business data.
      */
-    control_bindings: z
-      .array(
-        z
-          .object({
-            role: z.string().min(1),
-            name: z.string().min(1).optional(),
-            name_pattern: z.string().min(1).optional(),
-            intent: z.string().min(1).optional(),
-            risk_class: RiskClass,
-          })
-          .strict()
-          .refine((b) => (b.name === undefined) !== (b.name_pattern === undefined), 'exactly one of name or name_pattern is required')
-          .refine((b) => b.risk_class !== 'test_owned_mutation' || b.intent !== undefined, 'a mutation binding requires an intent'),
-      )
-      .default([]),
+    intents: z.record(z.string().regex(/^[a-z0-9_]+(\.[a-z0-9_]+)+$/), z.object({ kind: z.enum(['benign', 'session', 'mutation', 'external']), description: z.string().optional() }).strict()).default({}),
+    /** Navigable routes and their effect. Navigation to an unregistered route is denied. */
+    routes: z.array(z.object({ path: z.string().startsWith('/'), effect: z.enum(['none', 'session']).default('none') }).strict()).default([]),
+    /**
+     * Trusted semantics for controls, scoped by route, form and section. The
+     * model never decides what a control does; a control with no binding has
+     * unknown effect and is denied for every operation and every driver.
+     */
+    control_bindings: z.array(ControlBindingSpec).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((p, ctx) => {
+    for (const [name, m] of Object.entries(p.mutations)) {
+      for (const i of m.action_intents) {
+        if (p.intents[i] && p.intents[i]!.kind !== 'mutation') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['mutations', name], message: `intent ${i} is registered as ${p.intents[i]!.kind}, not mutation` });
+      }
+    }
+    p.control_bindings.forEach((b, i) => {
+      if (b.intent && Object.keys(p.intents).length > 0 && !p.intents[b.intent]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['control_bindings', i, 'intent'], message: `intent ${b.intent} is not registered` });
+    });
+  });
 export type ProjectPolicy = z.output<typeof ProjectPolicy>;
 
 export function resolveAllowedOrigins(policy: ProjectPolicy, profile: string, candidateOrigin: string): Set<string> {
@@ -86,7 +120,10 @@ export interface ControlBinding {
   risk_class: z.infer<typeof RiskClass>;
 }
 
-/** Resolve the trusted binding for an observed control; first match wins, no match means unknown risk. */
+/**
+ * Legacy role/name lookup kept for reporting. Authorization must use
+ * `authorizeAction`, which scopes bindings by route, form, section and operation.
+ */
 export function bindControl(policy: ProjectPolicy, control: { role: string; name: string }): ControlBinding {
   for (const b of policy.control_bindings) {
     if (b.role !== control.role) continue;

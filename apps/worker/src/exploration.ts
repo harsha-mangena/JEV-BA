@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ElementHandle } from '@playwright/test';
 import { OBSERVATION_EXTRACTOR_VERSION, observe, resolveNode } from '@qa/browser';
 import { digestConfig, type DecisionConfig } from '@qa/calibration';
-import { bindControl, type Observation, type Operation } from '@qa/contracts';
+import type { AuthorizationDecision, Observation, Operation } from '@qa/contracts';
 import { evaluateGate, HEURISTIC_GATE_V0, type GateConfig, type GateDecision, type GateInput } from '@qa/gate';
 import { buildDecisionRequest, validateResponse, type S1RawResponse, type S1Request, type SystemOneProvider } from '@qa/s1';
 import { validateS2Proposal, type SystemTwoProvider } from '@qa/s2';
@@ -89,6 +89,23 @@ export function explorationDriver(x: ExplorationOptions): Driver {
         for (const [head, why] of Object.entries(s1.invalid)) log.record('decision', `provider anomaly on ${head}: ${why}`, { head, problem: why });
 
         const byNode = new Map(obs.candidates.map((c) => [c.node_id, c]));
+        // Autonomous actions use the same authorization service as approved steps;
+        // the intent comes from the trusted contract, never from the model.
+        const authorizeCandidate = (op: Operation, nodeId: string | null, parameterRef?: string | null): AuthorizationDecision => {
+          if (op !== 'CLICK' && op !== 'TYPE' && op !== 'SELECT') return session.authorize({ op: op === 'SCROLL' || op === 'WAIT' || op === 'DONE' || op === 'BLOCKED' ? op : 'WAIT', route: obs.route });
+          const c = nodeId ? byNode.get(nodeId) : undefined;
+          if (!c) return { allowed: false, code: 'unknown_effect', reason: 'target is not a grounded candidate', effect: 'unknown', intent: null };
+          if (parameterRef !== undefined && parameterRef !== null && !s.inputs.includes(parameterRef)) {
+            return { allowed: false, code: 'parameter_not_accepted', reason: `${parameterRef} is not an input this scenario supplies`, effect: 'unknown', intent: null };
+          }
+          return session.authorize({
+            op,
+            route: obs.route,
+            control: { role: c.role, name: c.name, form: c.form, section: c.section },
+            intent_source: 'contract',
+            ...(parameterRef === undefined ? { effect_only: true } : parameterRef === null ? {} : { parameter: { kind: 'ref', ref: parameterRef } }),
+          });
+        };
         const common: GateInput = {
           config,
           identity_verified: true,
@@ -105,12 +122,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
           s1,
           target_keys: built.targetKeys,
           truncated_heads: built.truncatedHeads,
-          binding: (op, nodeId) => {
-            if (op === 'TYPE') return { risk_class: 'reversible_input' };
-            if (op !== 'CLICK' || !nodeId) return { risk_class: 'read_only' };
-            const c = byNode.get(nodeId);
-            return c ? bindControl(o.policy, c) : { risk_class: 'unknown' };
-          },
+          authorize: (op, nodeId, parameterRef) => authorizeCandidate(op, nodeId, parameterRef),
           freshness: async (nodeId) => {
             const current = await currentDocumentId(session);
             const r = await resolveNode(page, obs.document_id, nodeId);
@@ -201,21 +213,8 @@ export function explorationDriver(x: ExplorationOptions): Driver {
         actions++;
         const target = byNode.get(decision.node_id!)!;
         const intentId = `${session.attemptId}.i${actions}`;
-        const binding = common.binding(decision.op!, decision.node_id);
-        log.record('intent', `persisted: ${decision.op} ${target.role} "${target.name}"`, {
-          intent_id: intentId,
-          observation_id: obs.observation_id,
-          operation: decision.op,
-          target: decision.node_id,
-          target_role: target.role,
-          target_name: target.name,
-          milestone_id: m.id,
-          parameter_ref: decision.parameter_ref,
-          risk_class: binding.risk_class,
-          action_intent: binding.intent ?? null,
-          state: 'persisted',
-          policy_decision: 'allowed',
-        });
+        const auth = authorizeCandidate(decision.op!, decision.node_id, decision.op === 'TYPE' ? decision.parameter_ref : undefined);
+        if (!auth.allowed) throw new Stop('BLOCKED', 'policy_denied', `${m.id}: ${decision.op} "${target.name}" refused at dispatch: ${auth.reason}`);
         const r = await resolveNode(page, obs.document_id, decision.node_id!);
         if (!r.ok) {
           log.record('intent', `not dispatched: node ${r.reason}`, { intent_id: intentId, state: 'failed' });
@@ -223,27 +222,51 @@ export function explorationDriver(x: ExplorationOptions): Driver {
         }
         const h: ElementHandle<Element> = r.handle;
         try {
-          if (decision.op === 'CLICK') await h.click({ trial: true, timeout: s.budgets.action_timeout_ms });
+          if (decision.op === 'CLICK') await h.click({ trial: true, timeout: session.remainingMs(s.budgets.action_timeout_ms) });
         } catch (e) {
+          await h.dispose().catch(() => undefined);
           log.record('intent', `not dispatched: ${(e as Error).message.split('\n')[0]}`, { intent_id: intentId, state: 'failed' });
           recent.push({ operation: decision.op!, target_name: target.name, result: 'failed' });
           noEffect++;
           continue;
         }
-        try {
-          if (decision.op === 'CLICK') {
-            await h.click({ timeout: s.budgets.action_timeout_ms });
-            await page.waitForLoadState('load');
-            await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
-          } else {
-            await h.fill(session.resolveValue(decision.parameter_ref!), { timeout: s.budgets.action_timeout_ms });
-          }
-        } catch (e) {
-          log.record('intent', `effect unknown: ${(e as Error).message.split('\n')[0]}`, { intent_id: intentId, state: 'effect_unknown' });
-          throw new Stop('ERROR', 'step_failed', `${m.id}: ${decision.op} "${target.name}" may have been dispatched; effect unknown and not retried`);
-        } finally {
-          await h.dispose().catch(() => undefined);
-        }
+        const outcome = await session.dispatch(
+          {
+            intent_id: intentId,
+            operation: decision.op!,
+            description: `${decision.op} ${target.role} "${target.name}"`,
+            route: obs.route,
+            control: { role: target.role, name: target.name, form: target.form, section: target.section },
+            observation_id: obs.observation_id,
+            target: decision.node_id,
+            target_role: target.role,
+            target_name: target.name,
+            milestone_id: m.id,
+            parameter_ref: decision.parameter_ref,
+            action_intent: auth.intent,
+            contract_intent: auth.intent,
+            effect: auth.effect,
+            risk_class: auth.risk_class,
+            mutation: auth.mutation,
+          },
+          async () => {
+            try {
+              if (decision.op === 'CLICK') {
+                await h.click({ timeout: session.remainingMs(s.budgets.action_timeout_ms) });
+                await page.waitForLoadState('load', { timeout: session.remainingMs(s.budgets.action_timeout_ms) });
+                await page.waitForLoadState('networkidle', { timeout: session.remainingMs(5_000) }).catch(() => undefined);
+              } else {
+                await h.fill(session.resolveValue(decision.parameter_ref!), { timeout: session.remainingMs(s.budgets.action_timeout_ms) });
+              }
+              return { status: 'done', detail: `${decision.op} "${target.name}"` };
+            } catch (e) {
+              return { status: 'effect_unknown', reason: 'step_failed', detail: (e as Error).message.split('\n')[0]! };
+            } finally {
+              await h.dispose().catch(() => undefined);
+            }
+          },
+        );
+        if (outcome.status === 'effect_unknown') throw new Stop('ERROR', 'step_failed', `${m.id}: ${decision.op} "${target.name}" may have been dispatched; effect unknown and not retried`);
         session.checkpoint();
         const after = await observe(page, { pageId: session.attemptId });
         const effect = fingerprint(after) !== fingerprint(obs);

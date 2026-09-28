@@ -142,12 +142,24 @@ export function editNotePage(n: Note): string {
   <button type="submit">Save note</button></form>`;
 }
 
-export function settingsPage(theme: string, saved: boolean): string {
+export function settingsPage(theme: string, saved: boolean, profile: { nickname: string; email_offers: boolean } = { nickname: '', email_offers: false }): string {
   return `${saved ? '<p role="status" class="ok" data-testid="settings-saved">Settings saved.</p>' : ''}
 <form method="post" action="/settings" aria-label="Settings">
   <label for="theme">Theme</label><select id="theme" name="theme">
     <option value="light"${theme === 'light' ? ' selected' : ''}>Light</option>
     <option value="dark"${theme === 'dark' ? ' selected' : ''}>Dark</option></select>
   <p>Current theme: <span data-testid="current-theme">${esc(theme)}</span></p>
-  <button type="submit">Save settings</button></form>`;
+  <button type="submit">Save settings</button></form>
+<form method="post" action="/settings/profile" aria-label="Profile">
+  <label for="nickname">Nickname</label><input id="nickname" name="nickname" value="${esc(profile.nickname)}" data-autosave="/settings/profile/autosave">
+  <p>Saved nickname: <span data-testid="current-nickname">${esc(profile.nickname)}</span></p>
+  <button type="submit" data-testid="profile-save">Save</button></form>
+<form method="post" action="/settings/email" aria-label="Email preferences">
+  <label><input type="checkbox" id="offers" name="offers"${profile.email_offers ? ' checked' : ''}> Send me offers</label>
+  <p>Offers: <span data-testid="current-offers">${profile.email_offers ? 'on' : 'off'}</span></p>
+  <button type="submit" data-testid="email-save">Save</button></form>`;
 }
+
+/** Autosave: typing into a field persists on input (an effect with no button press). */
+export const AUTOSAVE_SCRIPT = `document.addEventListener('input',e=>{const el=e.target;if(!el.dataset||!el.dataset.autosave)return;clearTimeout(el._t);
+el._t=setTimeout(()=>fetch(el.dataset.autosave,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:el.name+'='+encodeURIComponent(el.value)}),50);});`;

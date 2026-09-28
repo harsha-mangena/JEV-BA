@@ -23,14 +23,77 @@ mutations:
     action_intents: [settings.save]
     environments: [local, preview, staging]
     test_owned_only: true
-# Trusted control semantics for autonomous exploration (first match wins).
-# Unbound controls have unknown risk and are denied by default.
+  test_owned_profile_write:
+    action_intents: [profile.save, profile.autosave]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_email_preferences_write:
+    action_intents: [prefs.email_save]
+    environments: [local, preview, staging]
+    test_owned_only: true
+  test_owned_cart_write:
+    action_intents: [cart.add]
+    environments: [local, preview, staging]
+    test_owned_only: true
+# ---------------------------------------------------------------------------
+# Application contract. Every control an automated driver may operate is bound
+# here by route, form/section, role, accessible name and operation. A control
+# with no binding has UNKNOWN effect and is denied for every driver; a known
+# mutating control used without its declared intent is denied.
+contract_version: fixture-shop/2
+intents:
+  auth.sign_in: { kind: session, description: Establish a session for the fixture account }
+  auth.sign_out: { kind: session }
+  cart.add: { kind: mutation }
+  cart.save_for_later: { kind: benign, description: Re-renders the cart; nothing is persisted }
+  checkout.submit: { kind: mutation }
+  notes.create: { kind: mutation }
+  notes.update: { kind: mutation }
+  notes.delete: { kind: mutation }
+  settings.save: { kind: mutation }
+  profile.save: { kind: mutation }
+  profile.autosave: { kind: mutation, description: Typing into Nickname persists on change }
+  prefs.email_save: { kind: mutation }
+routes:
+  - { path: / }
+  - { path: /login }
+  - { path: /products }
+  - { path: /cart }
+  - { path: /orders }
+  - { path: /orders/:id }
+  - { path: /notes }
+  - { path: /notes/:id/edit }
+  - { path: /settings }
 control_bindings:
-  - { role: button, name: Place order, intent: checkout.submit, risk_class: test_owned_mutation }
-  - { role: button, name: Save cart for later, risk_class: reversible_input }
-  - { role: button, name: Add note, intent: notes.create, risk_class: test_owned_mutation }
-  - { role: button, name: Confirm delete, intent: notes.delete, risk_class: test_owned_mutation }
-  - { role: button, name: Save settings, intent: settings.save, risk_class: test_owned_mutation }
-  - { role: button, name_pattern: "Delete .+", risk_class: read_only }
-  - { role: button, name: Cancel, risk_class: read_only }
+  # Navigation
   - { role: link, name_pattern: "Products|Cart|Orders|Notes|Settings|Browse products", risk_class: read_only }
+  - { role: link, name_pattern: "ord_[a-z0-9]+", route: /orders, risk_class: read_only }
+  - { role: button, name: Sign out, intent: auth.sign_out, risk_class: reversible_input }
+  # Sign in
+  - { role: textbox, name: Email, route: /login, form: Sign in, operations: [TYPE], risk_class: reversible_input, accepts: [fixture.email, literal] }
+  - { role: textbox, name: Password, route: /login, form: Sign in, operations: [TYPE], risk_class: reversible_input, accepts: [secret.password] }
+  - { role: button, name: Sign in, route: /login, form: Sign in, intent: auth.sign_in, risk_class: reversible_input }
+  # Catalog and cart
+  - { role: button, name_pattern: "Add .+ to cart", route: /products, intent: cart.add, risk_class: test_owned_mutation }
+  - { role: textbox, name: Delivery address, route: [/cart, /checkout], form: Checkout, operations: [TYPE], risk_class: reversible_input, accepts: [fixture.delivery_address, literal] }
+  - { role: button, name: Place order, route: [/cart, /checkout], form: Checkout, intent: checkout.submit, risk_class: test_owned_mutation }
+  # Intended copy change shipped with the checkout_button_renamed variant: the contract names the new label as the
+  # same submit control. Any other label (e.g. "Continue") has unknown effect and is denied.
+  - { role: button, name: Place your order, route: [/cart, /checkout], form: Checkout, intent: checkout.submit, risk_class: test_owned_mutation }
+  - { role: button, name: Save cart for later, route: [/cart, /checkout], form: Checkout, intent: cart.save_for_later, risk_class: read_only }
+  # Notes
+  - { role: textbox, name_pattern: "Note title|Note body", route: /notes, form: New note, operations: [TYPE], risk_class: reversible_input, accepts: [literal] }
+  - { role: button, name: Add note, route: /notes, form: New note, intent: notes.create, risk_class: test_owned_mutation }
+  - { role: button, name_pattern: "Delete .+", route: /notes, risk_class: read_only }
+  - { role: link, name_pattern: "Edit .+", route: /notes, risk_class: read_only }
+  - { role: button, name: Cancel, route: /notes, section_pattern: "Delete .+", risk_class: read_only }
+  - { role: button, name: Confirm delete, route: /notes, section_pattern: "Delete .+", intent: notes.delete, risk_class: test_owned_mutation }
+  - { role: textbox, name_pattern: "Note title|Note body", route: /notes/:id/edit, form: Edit note, operations: [TYPE], risk_class: reversible_input, accepts: [literal] }
+  - { role: button, name: Save note, route: /notes/:id/edit, form: Edit note, intent: notes.update, risk_class: test_owned_mutation }
+  # Settings: three forms, two of which have a button named "Save"
+  - { role: combobox, name: Theme, route: /settings, form: Settings, operations: [SELECT], risk_class: reversible_input, accepts: [literal] }
+  - { role: button, name: Save settings, route: /settings, form: Settings, intent: settings.save, risk_class: test_owned_mutation }
+  - { role: textbox, name: Nickname, route: /settings, form: Profile, operations: [TYPE], intent: profile.autosave, risk_class: test_owned_mutation, accepts: [literal] }
+  - { role: button, name: Save, route: /settings, form: Profile, intent: profile.save, risk_class: test_owned_mutation }
+  - { role: checkbox, name: Send me offers, route: /settings, form: Email preferences, risk_class: reversible_input }
+  - { role: button, name: Save, route: /settings, form: Email preferences, intent: prefs.email_save, risk_class: test_owned_mutation }

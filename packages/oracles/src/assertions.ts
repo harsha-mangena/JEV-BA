@@ -28,6 +28,8 @@ export interface Attachment {
 
 export interface AssertionContext {
   quality?: QualityContext;
+  /** Navigation authorization for assertions that re-load a page (defaults to allowed for standalone use). */
+  authorizeNavigation?(path: string): boolean;
   page: Page;
   fixtureData: Record<string, string | number | boolean>;
   fixtures: FixtureClient;
@@ -129,7 +131,12 @@ export async function evaluateAssertion(a: Assertion, ctx: AssertionContext): Pr
       return { type: a.type, status: actual === expected ? 'passed' : 'failed', expected, actual, ...(actual === expected ? {} : { message: `total differs by ${actual - expected} minor units` }) };
     }
     case 'persists_after_reload': {
-      await ctx.page.reload({ waitUntil: 'load', timeout: t });
+      // A GET of the current URL, never a browser reload: reloading a POST result would resubmit the form.
+      const path = new URL(ctx.page.url()).pathname;
+      if (ctx.authorizeNavigation && !ctx.authorizeNavigation(path)) {
+        return { type: a.type, status: 'failed', expected: { target: describeLocator(a.target), visible_after_reload: true }, actual: null, message: `re-loading ${path} is not an authorized navigation in the application contract` };
+      }
+      await ctx.page.goto(ctx.page.url(), { waitUntil: 'load', timeout: t });
       const r = await pollUntil(() => isVisibleUnique(ctx.page, a.target), (v) => v.visible, t);
       return { type: a.type, status: r.ok ? 'passed' : 'failed', expected: { target: describeLocator(a.target), visible_after_reload: true }, actual: r.value };
     }

@@ -2,9 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
-import { EXECUTION_PROFILES } from '@qa/browser';
+import { EXECUTION_PROFILES, type StepOutcome } from '@qa/browser';
 import {
+  authorizeAction,
   parseRef,
+  type ActionRequest,
+  type AuthorizationDecision,
   resolveAllowedOrigins,
   type AssertionResult,
   type CaseResult,
@@ -76,12 +79,38 @@ export interface Session {
   resolveValue(ref: string): string;
   /** Throws Stop if navigation left the allowed origins, the run was cancelled, or the deadline passed. */
   checkpoint(): void;
+  /** Shared authorization service bound to this attempt's policy, scenario, environment, role and profile. */
+  authorize(request: ActionRequest): AuthorizationDecision;
+  /** Remaining attempt budget, capped at `cap` (never below 1 ms). */
+  remainingMs(cap: number): number;
+  /**
+   * Record an authorized intent before dispatch, run `fn` exactly once, and
+   * record the outcome. Durable storage and reconciliation plug in here.
+   */
+  dispatch(intent: DispatchIntent, fn: () => Promise<StepOutcome>): Promise<StepOutcome>;
   /** Evaluate a milestone's approved assertions; records and returns failures. */
   verify(m: Milestone): Promise<AssertionResult[]>;
   screenshot(name: string): Promise<void>;
 }
 
 export type Driver = (s: Session) => Promise<void>;
+
+export interface DispatchIntent {
+  intent_id: string;
+  operation: string;
+  description: string;
+  route: string;
+  control: unknown;
+  parameter_ref: string | null;
+  action_intent: string | null;
+  effect: string;
+  contract_intent: string | null;
+  risk_class: string;
+  mutation: string | null;
+  milestone_id: string;
+  step_index?: number;
+  [k: string]: unknown;
+}
 
 const usesSecrets = (s: Scenario) =>
   s.inputs.some((r) => parseRef(r).scope === 'secret') ||
@@ -183,6 +212,18 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         if (v === undefined) throw new Stop('ERROR', 'fixture_error', `${ref} was not provisioned`);
         return String(v);
       },
+      authorize(request) {
+        return authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, request);
+      },
+      remainingMs(cap) {
+        return Math.max(1, Math.min(cap, deadline - Date.now()));
+      },
+      async dispatch(intent, fn) {
+        log.record('intent', `persisted: ${intent.description}`, { ...intent, state: 'persisted', policy_decision: 'allowed' });
+        const outcome = await fn();
+        log.record('intent', `${outcome.status}: ${intent.description}`, { intent_id: intent.intent_id, state: outcome.status === 'done' ? 'acknowledged' : outcome.status === 'not_dispatched' ? 'failed' : 'effect_unknown', detail: outcome.detail });
+        return outcome;
+      },
       checkpoint() {
         if (blockedNavigation) throw new Stop('BLOCKED', 'origin_blocked', `navigation to disallowed origin ${blockedNavigation}`);
         if (o.signal?.aborted) throw new Stop('CANCELLED', 'cancelled', 'run cancelled');
@@ -200,7 +241,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
               fixtures: o.fixtures,
               baseline,
               consoleErrors,
-              timeoutMs: s.budgets.assertion_timeout_ms,
+              timeoutMs: session.remainingMs(s.budgets.assertion_timeout_ms),
+              authorizeNavigation: (path) => authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, { op: 'NAVIGATE', route: path, path }).allowed,
               quality: {
                 baselines: o.quality?.baselines ?? null,
                 scenario_id: s.id,
@@ -238,6 +280,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       },
     };
 
+    const start = authorizeAction({ policy: o.policy, scenario: s.policy, environment: o.environment, role: s.role, readOnly: !!o.readOnly }, { op: 'NAVIGATE', route: '/', path: s.start_path });
+    if (!start.allowed) throw new Stop('BLOCKED', 'policy_denied', `start page: ${start.reason}`);
     const response = await p.goto(s.start_path, { waitUntil: 'load', timeout: s.budgets.action_timeout_ms * 2 });
     session.checkpoint();
     if (fixture?.auth && o.signedOutPath && new URL(p.url()).pathname === o.signedOutPath) {

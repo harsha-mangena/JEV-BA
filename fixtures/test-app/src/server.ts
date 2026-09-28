@@ -121,6 +121,11 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     const header = req.headers['x-qa-fixture-token'];
     if (!tokenMatches(Array.isArray(header) ? header[0] : header, opts.fixtureToken)) return sendJson(res, 401, { error: 'fixture token required' });
     const m = req.method ?? 'GET';
+    if (m === 'GET' && path === '/__qa/effects') {
+      const key = new URL(req.url ?? '/', 'http://x').searchParams.get('key') ?? '';
+      const effects = [...store.orders.values()].filter((o) => key && o.idempotency_key === key).map((o) => ({ kind: 'order', entity_id: o.id, owner: o.customer_id, idempotency_key: o.idempotency_key, created_at: o.created_at }));
+      return sendJson(res, 200, { effects });
+    }
     if (m === 'GET' && path === '/__qa/version') return sendJson(res, 200, { commit_sha: revision, defects: [...defects].sort() });
     if (m === 'PUT' && path === '/__qa/defects') {
       const body = await json(req);
@@ -148,7 +153,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     mm = path.match(/^\/__qa\/users\/([\w-]+)$/);
     if (m === 'GET' && mm) {
       const user = store.users.get(mm[1]!);
-      return user ? sendJson(res, 200, { id: user.id, role: user.role, preferences: user.preferences }) : sendJson(res, 404, { error: 'unknown user' });
+      return user ? sendJson(res, 200, { id: user.id, role: user.role, preferences: user.preferences, profile: user.profile }) : sendJson(res, 404, { error: 'unknown user' });
     }
     return sendJson(res, 404, { error: 'not found' });
   }
@@ -163,6 +168,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     const sid = cookies(req).get('sid');
     const userId = sid ? store.sessions.get(sid) : undefined;
     const user = userId ? (store.users.get(userId) ?? null) : null;
+    if (method !== 'GET' && method !== 'HEAD') store.writes.push({ method, path, user_id: user?.id ?? null, at: new Date().toISOString() });
 
     if (path === '/login') {
       if (method === 'GET') return page(res, 200, 'Sign in', null, v.loginPage());
@@ -208,6 +214,12 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
         if (!address) return renderCart(res, user, 422, { error: 'Delivery address is required.', address });
         if (address.length > 200) return renderCart(res, user, 422, { error: 'Delivery address must be 200 characters or fewer.', address });
       }
+      // Test integration: an idempotency key (scoped to this endpoint by the QA runner) deduplicates submissions.
+      const idemKey = (req.headers['x-qa-idempotency-key'] as string | undefined) ?? null;
+      if (idemKey) {
+        const prior = [...store.orders.values()].find((o) => o.customer_id === user.id && o.idempotency_key === idemKey);
+        if (prior) return redirect(res, `/orders/${prior.id}`);
+      }
       const { shipping, total } = store.cartTotal(user.id);
       const makeOrder = () => {
         const order = {
@@ -218,6 +230,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
           total_minor_units: total + (has('total_off_by_one') ? 1 : 0),
           delivery_address: address,
           created_at: new Date().toISOString(),
+          idempotency_key: idemKey,
         };
         store.orders.set(order.id, order);
         return order;
@@ -268,7 +281,16 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
         return redirect(res, '/notes?flash=Note+updated.');
       }
     }
-    if (method === 'GET' && path === '/settings') return page(res, 200, 'Settings', user, v.settingsPage(user.preferences.theme, url.searchParams.has('saved')));
+    if (method === 'GET' && path === '/settings') return page(res, 200, 'Settings', user, v.settingsPage(user.preferences.theme, url.searchParams.has('saved'), user.profile), v.AUTOSAVE_SCRIPT);
+    if (method === 'POST' && (path === '/settings/profile' || path === '/settings/profile/autosave')) {
+      const nickname = ((await form(req)).get('nickname') ?? '').slice(0, 60);
+      user.profile.nickname = nickname;
+      return path.endsWith('autosave') ? sendJson(res, 200, { saved: true }) : redirect(res, '/settings?saved=1');
+    }
+    if (method === 'POST' && path === '/settings/email') {
+      user.profile.email_offers = (await form(req)).get('offers') === 'on';
+      return redirect(res, '/settings?saved=1');
+    }
     if (method === 'POST' && path === '/settings') {
       const theme = (await form(req)).get('theme');
       if (theme !== 'light' && theme !== 'dark') return page(res, 422, 'Settings', user, `<p role="alert" class="error">Unknown theme.</p>${v.settingsPage(user.preferences.theme, false)}`);

@@ -76,10 +76,15 @@ describe('gate ordering', () => {
     expect(prod.outcome).toBe('DENY');
   });
 
-  it('denies unknown action semantics unless read-only exploration is configured', async () => {
+  it('denies unknown action semantics regardless of scenario opt-outs (audit F02b)', async () => {
     const pick2 = s1({ CLICK: 1 }, { t1: 1 });
-    expect((await evaluateGate(input({ s1: pick2 }))).reason_codes).toEqual(['unknown_action_semantics']);
-    expect((await evaluateGate(input({ s1: pick2, scenario_policy: { ...scenarioPolicy, unknown_actions: 'read_only_exploration' } }))).outcome).toBe('ACT');
+    const d = await evaluateGate(input({ s1: pick2 }));
+    expect(d.outcome).toBe('DENY');
+    expect(d.reason_codes).toEqual(expect.arrayContaining(['unknown_action_semantics']));
+    // `read_only_exploration` used to turn an unknown effect into ACT; unknown effects are now always denied.
+    const optOut = await evaluateGate(input({ s1: pick2, scenario_policy: { ...scenarioPolicy, unknown_actions: 'read_only_exploration' } }));
+    expect(optOut.outcome).toBe('DENY');
+    expect(optOut.reason_codes).toEqual(expect.arrayContaining(['unknown_action_semantics']));
   });
 
   it('denies before anything else when identity is unverified', async () => {
