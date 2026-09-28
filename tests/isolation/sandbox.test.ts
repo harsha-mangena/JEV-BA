@@ -137,7 +137,9 @@ describe('namespace sandbox', () => {
        setTimeout(() => { console.log(JSON.stringify({ ok, failed })); process.exit(0); }, 1500);`,
       { limits: { nproc: 64 } },
     );
+    // The sandbox itself must start even when its uid already runs many processes elsewhere.
     expect(r.status, r.stderr).toBe('exited');
+    expect(r.code, r.stderr).toBe(0);
     const out = JSON.parse(r.stdout) as { ok: number; failed: number };
     expect(out.failed).toBeGreaterThan(0);
   });

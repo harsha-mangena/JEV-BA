@@ -36,6 +36,11 @@ export interface SandboxRun {
   /** The single TCP endpoint the program may reach, exposed inside at the same host:port. */
   allowTcp?: { host: string; port: number };
   timeoutMs: number;
+  /**
+   * `nproc` bounds the processes the sandbox may *add*: RLIMIT_NPROC counts every
+   * process of the real uid, so the kernel limit is set to the uid's current count
+   * plus this budget (otherwise a busy CI user could not even start the sandbox).
+   */
   limits?: { nproc?: number; nofile?: number; fsizeBytes?: number };
 }
 
@@ -95,6 +100,18 @@ net.createServer((c) => { const u = net.connect(sock); c.pipe(u); u.pipe(c); c.o
   .listen(Number(port), host, () => fs.writeFileSync(ready, ''));
 `;
 
+/** Processes currently owned by a real uid (what RLIMIT_NPROC counts). */
+async function processesOf(uid: number): Promise<number> {
+  const { readdir, readFile } = await import('node:fs/promises');
+  let n = 0;
+  for (const pid of (await readdir('/proc').catch(() => [] as string[])).filter((d) => /^\d+$/.test(d))) {
+    const status = await readFile(`/proc/${pid}/status`, 'utf8').catch(() => '');
+    const m = /^Uid:\s+(\d+)/m.exec(status);
+    if (m && Number(m[1]) === uid) n++;
+  }
+  return n;
+}
+
 let probed: { ok: boolean; detail: string } | undefined;
 
 /** Whether this host can create the sandbox (user namespaces, pivot_root, perl, setpriv, unshare). */
@@ -146,7 +163,7 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
     const ro = [dirname(dirname(node)), ...(o.readOnly ?? [])];
     const lim = o.limits ?? {};
     const argv = [
-      `--nproc=${lim.nproc ?? 1024}`,
+      `--nproc=${(await processesOf(asRoot ? uid : (process.getuid?.() ?? 0))) + (lim.nproc ?? 1024)}`,
       `--nofile=${lim.nofile ?? 4096}`,
       `--fsize=${lim.fsizeBytes ?? 512 * 1024 * 1024}`,
       '--core=0',
