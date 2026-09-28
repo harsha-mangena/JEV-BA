@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadPolicy, type Observation, type ScenarioPolicy } from '@qa/contracts';
 import { NONE, validateResponse, type S1Request } from '@qa/s1';
-import { evaluateGate, HEURISTIC_GATE_V0, type GateInput } from '../src/index.ts';
+import { autonomyMode, evaluateGate, HEURISTIC_GATE_V0, type GateInput } from '../src/index.ts';
 
 const policy = await loadPolicy(join(import.meta.dirname, '../../../specs/policies/fixture-shop.yaml'));
 const scenarioPolicy: ScenarioPolicy = { environments: ['staging'], mutations: ['test_owned_order_create'], external_effects: 'sandbox_only', allowed_origin_profile: 'owned_checkout', unknown_actions: 'deny' };
@@ -151,22 +151,47 @@ describe('gate ordering', () => {
     expect(typeOnButton.reason_codes).toEqual(['s2_target_not_eligible']);
   });
 
-  it('uses a calibrated scorer only for the exact decision configuration and supported cohorts', async () => {
+  it('uses a calibrated scorer only for the exact decision configuration, resolved model and supported cohorts', async () => {
     const calibrated = { version_id: 'cal_1', decision_config_digest: 'cfg', threshold: 0.9, score: () => 0.95, supported: (f: { risk_class: string }) => f.risk_class === 'test_owned_mutation' };
     const config = { ...HEURISTIC_GATE_V0, calibrated };
-    const act = await evaluateGate(input({ config, decision_config_digest: 'cfg' }));
+    const model = { requested: 'jev-latest', resolved: 'jev-1.13.0' };
+    const act = await evaluateGate(input({ config, decision_config_digest: 'cfg', model }));
     expect(act).toMatchObject({ outcome: 'ACT' });
     expect(act.reason_codes).toContain('calibrated:cal_1');
-    const low = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, score: () => 0.5 } }, decision_config_digest: 'cfg' }));
+    const low = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, score: () => 0.5 } }, decision_config_digest: 'cfg', model }));
     expect(low).toMatchObject({ outcome: 'ESCALATE', reason_codes: ['calibrated_score_low'] });
-    const cohort = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, supported: () => false } }, decision_config_digest: 'cfg' }));
+    const cohort = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, supported: () => false } }, decision_config_digest: 'cfg', model }));
     expect(cohort.reason_codes).toEqual(['cohort_uncalibrated']);
-    // Changed model/prompt/extractor: calibration does not apply; heuristic routing, flagged.
-    const stale = await evaluateGate(input({ config, decision_config_digest: 'other' }));
-    expect(stale.reason_codes).toEqual(expect.arrayContaining(['calibration_config_mismatch', 'heuristic_gate_uncalibrated']));
+    // Changed model/prompt/extractor: the calibration does not apply and there is no heuristic fallback (audit F04a).
+    const stale = await evaluateGate(input({ config, decision_config_digest: 'other', model }));
+    expect(stale).toMatchObject({ outcome: 'ESCALATE', reason_codes: ['calibration_config_mismatch'] });
+    // A provider that does not report the model that answered cannot use a calibrated band.
+    const unknownModel = await evaluateGate(input({ config, decision_config_digest: 'cfg', model: { requested: 'jev-latest', resolved: null } }));
+    expect(unknownModel.reason_codes).toEqual(['resolved_model_unknown']);
     // Calibration never overrides permission.
-    const forbidden = await evaluateGate(input({ config, decision_config_digest: 'cfg', scenario_policy: { ...scenarioPolicy, mutations: [] } }));
+    const forbidden = await evaluateGate(input({ config, decision_config_digest: 'cfg', model, scenario_policy: { ...scenarioPolicy, mutations: [] } }));
     expect(forbidden.outcome).toBe('DENY');
+  });
+
+  it('enforces autonomy modes (audit F04)', async () => {
+    const confident = input();
+    expect((await evaluateGate(confident)).outcome).toBe('ACT');
+    expect(autonomyMode(HEURISTIC_GATE_V0)).toBe('heuristic_staging');
+    // Shadow: computes the decision, never acts.
+    const shadow = await evaluateGate({ ...confident, config: { ...HEURISTIC_GATE_V0, mode: 'shadow' } });
+    expect(shadow).toMatchObject({ outcome: 'ABSTAIN', reason_codes: ['shadow_mode', 'shadow_would_act'] });
+    // Heuristic staging never acts in production.
+    const readOnly = () => ({ allowed: true as const, effect: 'none' as const, intent: null, mutation: null, risk_class: 'read_only' as const, binding: null });
+    expect((await evaluateGate({ ...confident, environment: 'production', authorize: readOnly })).reason_codes).toContain('heuristic_not_permitted_in_environment');
+    expect((await evaluateGate({ ...confident, environment: 'staging', authorize: readOnly })).outcome).toBe('ACT');
+    // A configuration claiming calibration is calibrated mode whatever it says, and an unqualified calibration routes.
+    const unqualified = { ...HEURISTIC_GATE_V0, heuristic: false, calibration_version: 'cal_unqualified' };
+    expect(autonomyMode(unqualified)).toBe('calibrated');
+    expect(await evaluateGate({ ...confident, config: unqualified })).toMatchObject({ outcome: 'ESCALATE', reason_codes: ['calibration_unqualified'] });
+    // S2 selections are uncalibrated: they may act only in heuristic staging.
+    const s2 = { ...confident, s2_selection: { op: 'CLICK' as const, node_id: 'n1' } };
+    expect((await evaluateGate(s2)).outcome).toBe('ACT');
+    expect(await evaluateGate({ ...s2, config: unqualified })).toMatchObject({ outcome: 'ABSTAIN', reason_codes: ['s2_selection_uncalibrated'] });
   });
 
   it('handles WAIT and BLOCKED without a target', async () => {

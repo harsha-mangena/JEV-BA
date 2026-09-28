@@ -155,8 +155,15 @@ export function canary(v: CalibrationVersion, candidateLabeled: LabeledDecision[
   return { drift: reasons.length > 0, reasons, current: cur, candidate: cand };
 }
 
-/** Attach the current calibration (if any) to a gate configuration. */
+/**
+ * Attach the current calibration (if any) to a gate configuration. A
+ * calibration that could not qualify an Act band (threshold null) still marks
+ * the configuration as calibrated-without-scorer, so the gate routes every
+ * decision instead of silently falling back to heuristic action.
+ */
 export function withCalibration<T extends { calibration_version: string | null; heuristic: boolean }>(base: T, v: CalibrationVersion | null): T & { calibrated?: CalibratedScorer } {
-  const scorer = v ? scorerFrom(v) : null;
-  return scorer ? { ...base, calibration_version: v!.id, heuristic: false, calibrated: scorer } : base;
+  if (!v) return base;
+  const scorer = scorerFrom(v);
+  const { calibrated: _drop, ...rest } = base as T & { calibrated?: CalibratedScorer };
+  return scorer ? { ...base, calibration_version: v.id, heuristic: false, calibrated: scorer } : ({ ...rest, calibration_version: v.id, heuristic: false } as T);
 }

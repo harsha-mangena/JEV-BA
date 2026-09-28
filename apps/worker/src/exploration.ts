@@ -3,7 +3,7 @@ import type { ElementHandle } from '@playwright/test';
 import { OBSERVATION_EXTRACTOR_VERSION, observe, resolveNode } from '@qa/browser';
 import { digestConfig, type DecisionConfig } from '@qa/calibration';
 import type { AuthorizationDecision, Observation, Operation } from '@qa/contracts';
-import { evaluateGate, HEURISTIC_GATE_V0, type GateConfig, type GateDecision, type GateInput } from '@qa/gate';
+import { autonomyMode, evaluateGate, HEURISTIC_GATE_V0, type GateConfig, type GateDecision, type GateInput } from '@qa/gate';
 import { buildDecisionRequest, validateResponse, type S1RawResponse, type S1Request, type SystemOneProvider } from '@qa/s1';
 import { validateS2Proposal, type SystemTwoProvider } from '@qa/s2';
 import { Stop, type Driver, type Session } from './session.ts';
@@ -67,15 +67,15 @@ export function explorationDriver(x: ExplorationOptions): Driver {
     let s2Calls = 0;
     let noEffect = 0;
     let decisionNo = 0;
-    const decisionConfig: DecisionConfig = {
-      model: x.model,
+    // The digest binds the model that actually answered; it is recomputed per decision from the resolved model.
+    const decisionConfigFor = (resolvedModel: string | null): DecisionConfig => ({
+      model: resolvedModel ?? x.model,
       question_schema_version: x.questionSchemaVersion ?? QUESTION_SCHEMA_VERSION,
       extractor_version: OBSERVATION_EXTRACTOR_VERSION,
       policy_digest: createHash('sha256').update(JSON.stringify(o.policy)).digest('hex').slice(0, 16),
       candidate_filter_version: CANDIDATE_FILTER_VERSION,
       gate_version: config.version,
-    };
-    const decisionDigest = digestConfig(decisionConfig);
+    });
 
     for (const m of s.milestones) {
       let reobservations = 0;
@@ -86,6 +86,9 @@ export function explorationDriver(x: ExplorationOptions): Driver {
         const t0 = Date.now();
         const raw = await ask(x.s1, built.request, x.providerRetries ?? 2, session);
         const s1 = validateResponse(built.request, raw);
+        const decisionConfig = decisionConfigFor(s1.resolvedModel);
+        const decisionDigest = digestConfig(decisionConfig);
+        if (s1.resolvedModel && s1.resolvedModel !== x.model) log.record('decision', `resolved model ${s1.resolvedModel} differs from requested ${x.model}`, { requested_model: x.model, resolved_model: s1.resolvedModel });
         for (const [head, why] of Object.entries(s1.invalid)) log.record('decision', `provider anomaly on ${head}: ${why}`, { head, problem: why });
 
         const byNode = new Map(obs.candidates.map((c) => [c.node_id, c]));
@@ -134,6 +137,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
           },
           recent_no_effect: noEffect,
           decision_config_digest: decisionDigest,
+          model: { requested: x.model, resolved: s1.resolvedModel },
         };
 
         let decision: GateDecision = await evaluateGate(common);
@@ -150,6 +154,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
             target_distribution: d.op && d.op !== 'DONE' && d.op !== 'WAIT' && d.op !== 'BLOCKED' ? (s1.answers[`${d.op.toLowerCase()}_target`]?.distribution ?? null) : null,
             features: d.features,
             gate_config_version: config.version,
+            autonomy_mode: autonomyMode(config),
             calibration_version: config.calibrated?.version_id ?? config.calibration_version,
             decision_config: decisionConfig,
             decision_config_digest: decisionDigest,

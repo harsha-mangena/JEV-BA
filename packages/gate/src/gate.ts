@@ -17,10 +17,24 @@ import { NEED_MORE_CONTEXT, NONE, TARGET_HEAD, type ValidAnswer, type Validation
  * held-out labeled data, thresholds are *heuristic* settings: they route
  * decisions but establish no precision guarantee.
  */
+/**
+ * Autonomy mode (audit F04):
+ *  - `shadow`: decisions are computed and recorded but never executed;
+ *  - `heuristic_staging`: uncalibrated thresholds may act, outside production only,
+ *    and every such action is labelled uncalibrated;
+ *  - `calibrated`: only a fitted scorer whose decision configuration (including the
+ *    *resolved* model) matches exactly may act; anything else routes, never acts.
+ * A configuration that claims calibration (`heuristic: false` or a scorer) is always
+ * `calibrated`, whatever else it says, so a stale or unqualified calibration can never
+ * fall back to heuristic action.
+ */
+export type AutonomyMode = 'shadow' | 'heuristic_staging' | 'calibrated';
+
 export interface GateConfig {
   version: string;
   calibration_version: string | null;
   heuristic: boolean;
+  mode?: AutonomyMode;
   min_op_probability: number;
   min_target_probability: number;
   min_target_margin: number;
@@ -42,6 +56,7 @@ export const HEURISTIC_GATE_V0: GateConfig = {
   version: 'heuristic-v0',
   calibration_version: null,
   heuristic: true,
+  mode: 'heuristic_staging',
   min_op_probability: 0.8,
   min_target_probability: 0.8,
   min_target_margin: 0.2,
@@ -87,9 +102,20 @@ export interface GateInput {
    * probability, and does not turn an uncertain decision into a certain one.
    */
   s2_selection?: { op: Operation; node_id: string };
-  /** Digest of model, question schema, extractor, policy, candidate filter and gate versions in use. */
+  /** Digest of the *resolved* model, question schema, extractor, policy, candidate filter and gate versions in use. */
   decision_config_digest?: string;
+  /** Model identity for this decision; calibrated autonomy requires a resolved model. */
+  model?: { requested: string; resolved: string | null };
 }
+
+export function autonomyMode(c: GateConfig): AutonomyMode {
+  if (c.mode === 'shadow') return 'shadow';
+  if (c.calibrated || !c.heuristic || c.calibration_version !== null) return 'calibrated';
+  return 'heuristic_staging';
+}
+
+/** Environments in which uncalibrated (heuristic) autonomy may act. */
+const HEURISTIC_FORBIDDEN_ENVIRONMENTS = new Set(['production', 'prod']);
 
 export interface GateDecision {
   outcome: GateOutcome;
@@ -193,29 +219,42 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
     recent_no_effect: g.recent_no_effect,
   };
   if (g.recent_no_effect >= g.config.max_recent_no_effect) return deny('ABSTAIN', ['loop_no_effect'], { op, node_id: nodeId, features });
-  if (g.s2_selection) return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 's2_selected_uncalibrated'], features };
   const c = g.config;
-  const cal = c.calibrated;
-  if (cal && g.decision_config_digest === cal.decision_config_digest) {
+  const mode = autonomyMode(c);
+  const routeOrAbstain = (why: string[]): GateDecision => ({ outcome: g.budget.s2_remaining > 0 && !g.s2_selection ? 'ESCALATE' : 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: why, features });
+  const heuristicBlocked = HEURISTIC_FORBIDDEN_ENVIRONMENTS.has(g.environment);
+
+  if (g.s2_selection) {
+    // A typed S2 proposal is not a calibrated probability: it may act only where heuristic autonomy may.
+    if (mode === 'shadow') return { outcome: 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 'shadow_mode', 'shadow_would_act'], features };
+    if (mode === 'calibrated') return { outcome: 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 's2_selection_uncalibrated'], features };
+    if (heuristicBlocked) return { outcome: 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 'heuristic_not_permitted_in_environment'], features };
+    return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 's2_selected_uncalibrated'], features };
+  }
+
+  if (mode === 'calibrated') {
+    const cal = c.calibrated;
+    if (!cal) return routeOrAbstain([...reasons, c.calibration_version ? 'calibration_unqualified' : 'calibration_missing']);
+    if (!g.model?.resolved) return routeOrAbstain([...reasons, 'resolved_model_unknown']);
+    if (g.decision_config_digest !== cal.decision_config_digest) return routeOrAbstain([...reasons, 'calibration_config_mismatch']);
     if (!cal.supported(features)) reasons.push('cohort_uncalibrated');
     else if (cal.score(features) < cal.threshold) reasons.push('calibrated_score_low');
-    if (reasons.some((r) => r !== 'candidates_truncated')) return { outcome: g.budget.s2_remaining > 0 ? 'ESCALATE' : 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };
+    if (reasons.some((r) => r !== 'candidates_truncated')) return routeOrAbstain(reasons);
     return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, `calibrated:${cal.version_id}`], features };
   }
-  // No calibration for this exact configuration: heuristic routing, labelled as such.
-  if (cal) reasons.push('calibration_config_mismatch');
+
+  // Heuristic routing (staging or shadow): thresholds route decisions but establish no precision guarantee.
   if (features.op_probability < c.min_op_probability) reasons.push('op_uncertain');
   if (targetAnswer) {
     if (targetAnswer.top.p < c.min_target_probability) reasons.push('target_uncertain');
     if (targetAnswer.margin < c.min_target_margin) reasons.push('target_margin_low');
     if (c.min_pair_score !== undefined && features.pair_score! < c.min_pair_score) reasons.push('pair_score_low');
   }
-  const uncertain = reasons.some((r) => r !== 'candidates_truncated' && r !== 'calibration_config_mismatch');
-  if (uncertain) {
-    const outcome: GateOutcome = g.budget.s2_remaining > 0 ? 'ESCALATE' : 'ABSTAIN';
-    return { outcome, op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };
-  }
-  if (c.heuristic) reasons.push('heuristic_gate_uncalibrated');
+  const uncertain = reasons.some((r) => r !== 'candidates_truncated');
+  if (uncertain) return routeOrAbstain(reasons);
+  if (mode === 'shadow') return { outcome: 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 'shadow_mode', 'shadow_would_act'], features };
+  if (heuristicBlocked) return { outcome: 'ABSTAIN', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, 'heuristic_not_permitted_in_environment'], features };
+  reasons.push('heuristic_gate_uncalibrated');
   return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: reasons, features };
 }
 

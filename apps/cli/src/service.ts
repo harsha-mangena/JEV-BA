@@ -4,7 +4,7 @@ import { buildApi } from '@qa/api';
 import { Db } from '@qa/db';
 import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
 import { CalibrationRegistry, withCalibration } from '@qa/calibration';
-import { HEURISTIC_GATE_V0 } from '@qa/gate';
+import { HEURISTIC_GATE_V0, type AutonomyMode } from '@qa/gate';
 import { HttpS1Provider, probeProvider, TYPESAFE_CONTRACT, TypeSafeProvider, type SystemOneProvider } from '@qa/s1';
 
 export interface ServiceArgs {
@@ -189,7 +189,11 @@ async function explorationFromEnv() {
   const s1 = s1FromEnv();
   if (!s1) return null;
   const cal = process.env.QA_CALIBRATION_DIR ? await new CalibrationRegistry(process.env.QA_CALIBRATION_DIR).current() : null;
-  return { s1: s1.provider, model: s1.model, gate: withCalibration(HEURISTIC_GATE_V0, cal) };
+  // Autonomy is opt-in: the service records decisions in shadow mode unless a mode is chosen explicitly.
+  const mode = (process.env.QA_AUTONOMY_MODE ?? 'shadow') as AutonomyMode;
+  if (!['shadow', 'heuristic_staging', 'calibrated'].includes(mode)) throw new UsageError(`QA_AUTONOMY_MODE must be shadow, heuristic_staging or calibrated (got ${mode})`);
+  if (mode === 'calibrated' && !cal) throw new UsageError('QA_AUTONOMY_MODE=calibrated needs QA_CALIBRATION_DIR with a current calibration');
+  return { s1: s1.provider, model: s1.model, gate: withCalibration({ ...HEURISTIC_GATE_V0, mode }, mode === 'calibrated' ? cal : null) };
 }
 
 /**
