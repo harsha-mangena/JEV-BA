@@ -5,6 +5,7 @@ import { Db } from '@qa/db';
 import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
 import { CalibrationRegistry, withCalibration } from '@qa/calibration';
 import { HEURISTIC_GATE_V0, type AutonomyMode } from '@qa/gate';
+import { AnthropicVisionS2Provider } from '@qa/s2';
 import { HttpS1Provider, probeProvider, TYPESAFE_CONTRACT, TypeSafeProvider, type SystemOneProvider } from '@qa/s1';
 
 export interface ServiceArgs {
@@ -193,7 +194,10 @@ async function explorationFromEnv() {
   const mode = (process.env.QA_AUTONOMY_MODE ?? 'shadow') as AutonomyMode;
   if (!['shadow', 'heuristic_staging', 'calibrated'].includes(mode)) throw new UsageError(`QA_AUTONOMY_MODE must be shadow, heuristic_staging or calibrated (got ${mode})`);
   if (mode === 'calibrated' && !cal) throw new UsageError('QA_AUTONOMY_MODE=calibrated needs QA_CALIBRATION_DIR with a current calibration');
-  return { s1: s1.provider, model: s1.model, gate: withCalibration({ ...HEURISTIC_GATE_V0, mode }, mode === 'calibrated' ? cal : null) };
+  // System Two: QA_S2_PROVIDER=anthropic (credentials resolved by the Anthropic SDK), QA_S2_MODEL optional.
+  const s2 = process.env.QA_S2_PROVIDER === 'anthropic' ? new AnthropicVisionS2Provider(process.env.QA_S2_MODEL ? { model: process.env.QA_S2_MODEL } : {}) : undefined;
+  if (process.env.QA_S2_PROVIDER && !s2) throw new UsageError(`unknown QA_S2_PROVIDER ${process.env.QA_S2_PROVIDER}`);
+  return { s1: s1.provider, model: s1.model, gate: withCalibration({ ...HEURISTIC_GATE_V0, mode }, mode === 'calibrated' ? cal : null), ...(s2 ? { s2 } : {}) };
 }
 
 /**

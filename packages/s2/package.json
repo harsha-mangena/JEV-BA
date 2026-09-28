@@ -3,8 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@qa/contracts": "*",
     "zod": "^3.24.0"
   }

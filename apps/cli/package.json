@@ -21,6 +21,7 @@
     "@qa/compiler": "*",
     "@qa/calibration": "*",
     "@qa/gate": "*",
-    "@qa/s1": "*"
+    "@qa/s1": "*",
+    "@qa/s2": "*"
   }
 }

@@ -1,0 +1,26 @@
+# Autonomous variant of the theme preference journey: exercises SELECT with a
+# page-offered option. Advisory until the gate is calibrated.
+schema_version: 1
+id: settings_exploration
+requirement_ids: [SETTINGS-01]
+mode: exploration
+start_path: /settings
+fixture: customer_empty_v1
+role: customer
+goal: Switch the theme preference to Dark and save it.
+milestones:
+  - id: preference_saved
+    action_intent: settings.save
+    assertions:
+      - type: ui_visible
+        target: settings-saved
+      - type: ui_text
+        target: current-theme
+        equals: dark
+execution_profiles: [chromium_desktop]
+policy:
+  environments: [local, preview, staging]
+  mutations: [test_owned_preference_write]
+  external_effects: none
+  allowed_origin_profile: owned_app
+cleanup: delete_test_owned_entities

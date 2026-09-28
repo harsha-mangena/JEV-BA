@@ -13,7 +13,8 @@ const LANES = {
   service: { config: 'vitest.service.config.ts', requires: ['browser', 'postgres'] },
   audit: { config: 'vitest.audit.config.ts', requires: ['browser'] },
   isolation: { config: 'vitest.isolation.config.ts', requires: ['sandbox'] },
-  live: { config: 'vitest.live.config.ts', requires: ['provider-credentials'], env: ['QA_S1_API_KEY'] },
+  live: { config: 'vitest.live.config.ts', requires: ['provider-credentials'], env: ['QA_S1_API_KEY'], filter: 'tests/live/s1-contract.test.ts' },
+  live_s2: { config: 'vitest.live.config.ts', requires: ['anthropic-credentials', 'browser'], env: ['ANTHROPIC_API_KEY'], filter: 'tests/live/s2-vision.test.ts' },
 };
 
 const name = process.argv[2];
@@ -42,7 +43,7 @@ if (lane.kind === 'tsc') {
   command = lane.cmd.join(' ');
   result = spawnSync(lane.cmd[0], lane.cmd.slice(1), { stdio: 'inherit' });
 } else {
-  const args = ['vitest', 'run', '--config', lane.config, '--reporter=default', '--reporter=json', `--outputFile.json=${tmp}`];
+  const args = ['vitest', 'run', '--config', lane.config, ...(lane.filter ? [lane.filter] : []), '--reporter=default', '--reporter=json', `--outputFile.json=${tmp}`];
   command = `npx ${args.join(' ')}`;
   result = spawnSync('npx', args, { stdio: 'inherit', env: process.env });
 }

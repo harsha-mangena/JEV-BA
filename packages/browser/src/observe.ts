@@ -5,7 +5,7 @@ import { ensureEvalShim } from './shim.ts';
 import { installIdentify } from './identify.ts';
 
 /** Bumped whenever extraction semantics change; part of the pinned decision configuration. */
-export const OBSERVATION_EXTRACTOR_VERSION = 'observe-v1';
+export const OBSERVATION_EXTRACTOR_VERSION = 'observe-v2';
 
 /** Stays below the 255-option provider limit with room for NONE / NEED_MORE_CONTEXT. */
 export const DEFAULT_MAX_CANDIDATES = 200;
@@ -86,13 +86,17 @@ function extractInPage(maxText: number): RawExtraction {
 
   let shadowRoots = 0;
   const all: Element[] = [];
-  const collect = (root: Document | ShadowRoot) => {
+  // Open shadow roots are traversed (closed roots are invisible to page script by design).
+  const collect = (root: Document | ShadowRoot, depth: number) => {
     root.querySelectorAll(SELECTOR).forEach((e) => all.push(e));
     root.querySelectorAll('*').forEach((e) => {
-      if (e.shadowRoot) shadowRoots++;
+      if (e.shadowRoot && depth < 8) {
+        shadowRoots++;
+        collect(e.shadowRoot, depth + 1);
+      }
     });
   };
-  collect(document);
+  collect(document, 0);
 
   const elements: RawExtraction['elements'] = [];
   for (const el of all) {
@@ -205,7 +209,8 @@ export async function observe(page: Page, o: ObserveOptions): Promise<Observatio
       candidates_included: kept.size,
       truncated: kept.size < actionable.length,
       unsupported_frames: raw.frames,
-      shadow_roots_skipped: raw.shadow_roots,
+      shadow_roots_skipped: 0,
+      shadow_roots_traversed: raw.shadow_roots,
       extraction_errors: raw.errors,
     },
   };
