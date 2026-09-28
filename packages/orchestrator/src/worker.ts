@@ -387,9 +387,20 @@ export class JobWorker {
         `select id::text, tenant_id, kind, payload, attempts from outbox_events where published_at is null and available_at <= now() order by id limit $1 for update skip locked`,
         [limit],
       )).rows;
+      const done = new Set<string>();
       for (const ev of events) {
+        if (done.has(ev.id)) continue;
         try {
           if (ev.kind !== 'publish_status') throw new Error(`unknown outbox kind ${ev.kind}`);
+          // One publisher per run at a time: the run state is read and published under the lock, so a
+          // slower publisher can never overwrite a newer status with an older one.
+          const locked = (await c.query<{ ok: boolean }>(`select pg_try_advisory_xact_lock(hashtext('outbox:' || $1)) ok`, [ev.payload.run_id])).rows[0]!.ok;
+          if (!locked) continue;
+          // Other events for this run in this (locked) batch were enqueued before the state read below,
+          // so publishing the current state satisfies them; later events stay queued.
+          const same = events.filter((x) => x.id !== ev.id && x.kind === ev.kind && x.payload.run_id === ev.payload.run_id).map((x) => x.id);
+          if (same.length) await c.query('update outbox_events set published_at=now(), attempts=attempts+1 where id = any($1::bigint[])', [same]);
+          for (const id of same) done.add(id);
           const run = (await c.query<RunRow>('select * from runs where id=$1', [ev.payload.run_id])).rows[0]!;
           const project = (await this.orch.projectById(run.project_id))!;
           const dep = (await c.query<{ provider: string; provider_deployment_id: string }>('select provider, provider_deployment_id from deployments where id=$1', [run.deployment_id])).rows[0];

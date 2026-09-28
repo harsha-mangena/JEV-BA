@@ -125,7 +125,12 @@ export class Orchestrator {
       throw new ApiError(403, 'repository_mismatch', 'event repository is not bound to this project');
     }
 
-    const prior = await this.db.one<{ run_id: string | null; outcome: string; detail: string | null }>('select run_id, outcome, detail from event_deliveries where provider=$1 and delivery_id=$2', [delivery.provider, delivery.delivery_id]);
+    const prior = await this.db.one<{ run_id: string | null; outcome: string; detail: string | null; payload_digest: string }>('select run_id, outcome, detail, payload_digest from event_deliveries where provider=$1 and delivery_id=$2', [delivery.provider, delivery.delivery_id]);
+    if (prior && prior.payload_digest !== delivery.payload_digest) {
+      // A redelivery must be byte-identical; a reused delivery id with another payload is a replay or a bug.
+      await this.audit(this.db, p, 'deployment.delivery_conflict', project.id, { delivery_id: delivery.delivery_id });
+      throw new ApiError(409, 'delivery_payload_mismatch', 'this delivery id was already received with a different payload');
+    }
     if (prior) {
       if (prior.run_id) {
         const run = await this.db.one<RunRow>('select * from runs where id=$1', [prior.run_id]);
@@ -188,9 +193,10 @@ export class Orchestrator {
       }
       const runId = newId('run');
       const inserted = await c.query<RunRow>(
-        `insert into runs(id, tenant_id, project_id, deployment_id, environment, commit_sha, suite_revision, execution_profile, dedup_key, state, selection_manifest)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WAITING_READY',$10) on conflict (dedup_key) do nothing returning *`,
-        [runId, project.tenant_id, project.id, deployment.id, verified.environment, verified.commit_sha, suite.revision, profileSet, dedupKey, JSON.stringify(manifest)],
+        `insert into runs(id, tenant_id, project_id, deployment_id, environment, commit_sha, suite_revision, execution_profile, dedup_key, state, selection_manifest, execution_snapshot, generation)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WAITING_READY',$10,$11,
+                 (select coalesce(max(generation), 0) + 1 from runs where project_id=$3 and environment=$5)) on conflict (dedup_key) do nothing returning *`,
+        [runId, project.tenant_id, project.id, deployment.id, verified.environment, verified.commit_sha, suite.revision, profileSet, dedupKey, JSON.stringify(manifest), JSON.stringify(suite.snapshot)],
       );
       const deduplicated = inserted.rowCount === 0;
       const run = deduplicated ? (await c.query<RunRow>('select * from runs where dedup_key=$1', [dedupKey])).rows[0]! : inserted.rows[0]!;
@@ -291,6 +297,66 @@ export class Orchestrator {
       else if (!run.gate?.eligible) reasons.push(...(run.gate?.reasons ?? ['gate held']));
     }
     return { eligible: reasons.length === 0, run_id: run?.id ?? null, reasons };
+  }
+
+  /**
+   * Record a promotion decision for exactly one candidate: the gate evaluated
+   * now, bound to the run attempt, suite revision and generation it relied on.
+   * The decision expires and can be consumed once.
+   */
+  async decidePromotion(p: Principal, q: { project_id: string; environment: string; deployment_id: string; commit_sha: string; ttl_seconds?: number }) {
+    requireRole(p, 'submitter');
+    const project = await this.visibleProject(p, q.project_id);
+    const g = await this.gateStatus(p, q);
+    const run = g.run_id ? await this.db.one<RunRow & { generation: string | null }>('select * from runs where id=$1', [g.run_id]) : undefined;
+    const id = newId('prom');
+    const ttl = Math.min(Math.max(q.ttl_seconds ?? 900, 30), 86_400);
+    await this.db.tx(async (c) => {
+      await c.query(
+        `insert into promotion_decisions(id, tenant_id, project_id, environment, provider_deployment_id, commit_sha, run_id, run_attempt, suite_revision, generation, eligible, reasons, decided_by, expires_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now() + make_interval(secs => $14))`,
+        [id, project.tenant_id, project.id, q.environment, q.deployment_id, q.commit_sha, run?.id ?? null, run?.attempt ?? null, run?.suite_revision ?? null, run?.generation ?? null, g.eligible, JSON.stringify(g.reasons), p.actor, ttl],
+      );
+      await this.audit(c, p, 'promotion.decide', id, { eligible: g.eligible, reasons: g.reasons, run: run?.id ?? null });
+    });
+    return { decision_id: id, eligible: g.eligible, reasons: g.reasons, run_id: run?.id ?? null, expires_in_seconds: ttl };
+  }
+
+  /**
+   * Consume a promotion decision exactly once. It succeeds only if the
+   * decision was eligible, has not expired or been consumed, and the gate
+   * still holds for the same run attempt, suite revision and newest
+   * generation; otherwise it is consumed as `refused` with the reasons.
+   */
+  async consumePromotion(p: Principal, decisionId: string) {
+    requireRole(p, 'submitter');
+    return this.db.tx(async (c) => {
+      const d = (await c.query<{ id: string; tenant_id: string; project_id: string; environment: string; provider_deployment_id: string; commit_sha: string; run_id: string | null; run_attempt: number | null; suite_revision: string | null; generation: string | null; eligible: boolean; expired: boolean; consumed_at: string | null }>(
+        'select *, expires_at < now() as expired from promotion_decisions where id=$1 for update',
+        [decisionId],
+      )).rows[0];
+      if (!d || !canSeeProject(p, { tenant_id: d.tenant_id, id: d.project_id })) throw new ApiError(404, 'not_found', 'promotion decision not found');
+      if (d.consumed_at) throw new ApiError(409, 'already_consumed', 'this promotion decision was already used');
+      const reasons: string[] = [];
+      if (!d.eligible) reasons.push('the decision was not eligible');
+      if (d.expired) reasons.push('the decision has expired');
+      if (reasons.length === 0) {
+        const g = await this.gateStatus(p, { project_id: d.project_id, environment: d.environment, deployment_id: d.provider_deployment_id, commit_sha: d.commit_sha });
+        if (!g.eligible) reasons.push(...g.reasons);
+        const run = d.run_id ? (await c.query<{ attempt: number; suite_revision: string; generation: string }>('select attempt, suite_revision, generation::text from runs where id=$1', [d.run_id])).rows[0] : undefined;
+        if (!run || g.run_id !== d.run_id) reasons.push('the gate now relies on a different run');
+        else {
+          if (run.attempt !== d.run_attempt) reasons.push(`run attempt changed (${d.run_attempt} → ${run.attempt})`);
+          if (run.suite_revision !== d.suite_revision) reasons.push('suite revision changed since the decision');
+        }
+        const newest = (await c.query<{ g: string | null }>('select max(generation)::text g from runs where project_id=$1 and environment=$2', [d.project_id, d.environment])).rows[0]?.g ?? null;
+        if (d.generation !== null && newest !== null && newest !== String(d.generation)) reasons.push(`a newer run generation exists (${d.generation} → ${newest})`);
+      }
+      const outcome = reasons.length ? 'refused' : 'promoted';
+      await c.query('update promotion_decisions set consumed_at=now(), consumed_by=$2, consume_outcome=$3 where id=$1', [decisionId, p.actor, outcome]);
+      await this.audit(c, p, 'promotion.consume', decisionId, { outcome, reasons });
+      return { decision_id: decisionId, promoted: outcome === 'promoted', reasons };
+    });
   }
 
   statusContext(project: ProjectRow, environment: string): string {

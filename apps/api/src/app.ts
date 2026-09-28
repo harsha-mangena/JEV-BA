@@ -150,6 +150,12 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
     return orch.gateStatus(await auth(req), q);
   });
 
+  app.post('/v1/promotions', async (req, reply) => {
+    const q = z.object({ project_id: z.string(), environment: z.string(), deployment_id: z.string(), commit_sha: z.string(), ttl_seconds: z.number().int().positive().optional() }).strict().parse(req.body ?? {});
+    return reply.code(201).send(await orch.decidePromotion(await auth(req), q));
+  });
+  app.post<{ Params: { id: string } }>('/v1/promotions/:id/consume', async (req) => orch.consumePromotion(await auth(req), req.params.id));
+
   await opts.extend?.(app, orch);
   return app;
 }

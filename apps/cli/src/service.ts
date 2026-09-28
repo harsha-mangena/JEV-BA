@@ -164,6 +164,31 @@ export async function wait(a: ServiceArgs): Promise<number> {
 }
 
 /**
+ * Decide and consume a single-use promotion for one candidate. Exit 0 only
+ * when the decision was eligible and still held at consumption.
+ */
+export async function promote(a: ServiceArgs): Promise<number> {
+  const base = need(a['api-url'] as string, '--api-url').replace(/\/$/, '');
+  const body = { project_id: need(a.project as string, '--project'), environment: need(a.environment as string, '--environment'), deployment_id: need(a['deployment-id'] as string, '--deployment-id'), commit_sha: need(a['commit-sha'] as string, '--commit-sha') };
+  const d = await api('POST', `${base}/v1/promotions`, body);
+  if (d.status !== 201) {
+    console.error(`promotion decision failed (${d.status}): ${JSON.stringify(d.json)}`);
+    return 2;
+  }
+  console.log(`decision ${d.json.decision_id as string}: ${d.json.eligible ? 'eligible' : 'held'}`);
+  for (const r of (d.json.reasons as string[]) ?? []) console.log(`  - ${r}`);
+  if (!d.json.eligible) return 1;
+  const c = await api('POST', `${base}/v1/promotions/${encodeURIComponent(d.json.decision_id as string)}/consume`, {});
+  if (c.status !== 200) {
+    console.error(`consume failed (${c.status}): ${JSON.stringify(c.json)}`);
+    return 2;
+  }
+  console.log(c.json.promoted ? 'promoted' : 'refused at consumption');
+  for (const r of (c.json.reasons as string[]) ?? []) console.log(`  - ${r}`);
+  return c.json.promoted ? 0 : 1;
+}
+
+/**
  * S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_API_KEY,
  * QA_S1_MODEL (typesafe default jev-latest), QA_S1_ENDPOINT (typesafe default
  * is the official endpoint), QA_S1_TIMEOUT_MS, QA_S1_RETRIES.

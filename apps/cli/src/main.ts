@@ -67,6 +67,8 @@ Client commands (need QA_API_TOKEN):
   submit                   Submit a deployment candidate (--api-url, then --github-event <file> or
                            --deployment-id --environment --commit-sha --candidate-url [--provider --project]).
   wait                     Wait for a run (--api-url --run-id [--timeout s]); exit 0 only if the gate is eligible.
+  promote                  Decide and consume a single-use promotion (--api-url --project --environment
+                           --deployment-id --commit-sha); exit 0 only if promoted.
 
 Common options:
   --specs <dir>            Specs directory (default: ./specs)
@@ -273,6 +275,8 @@ async function main(): Promise<number> {
       return svc.submit(values);
     case 'wait':
       return svc.wait(values);
+    case 'promote':
+      return svc.promote(values);
     default:
       fail(`unknown command ${cmd}\n\n${USAGE}`);
   }
