@@ -1,5 +1,5 @@
 import { ProvisionedFixture, parseWith } from '@qa/contracts';
-import type { AdapterCapabilities, ApplicationAdapter, EffectReceipt } from './adapter.ts';
+import type { AdapterCapabilities, ApplicationAdapter, EffectLookup, EffectReceipt } from './adapter.ts';
 
 export class FixtureServiceError extends Error {
   constructor(
@@ -33,6 +33,8 @@ export class FixtureClient implements ApplicationAdapter {
     effect_lookup: true,
     idempotency: true,
     cleanup: true,
+    keyed_intents: ['checkout.submit'],
+    idempotency_header: 'x-qa-idempotency-key',
   };
 
   constructor(
@@ -93,8 +95,9 @@ export class FixtureClient implements ApplicationAdapter {
     throw new FixtureServiceError(`fixture-shop has no oracle for entity kind ${kind}`);
   }
 
-  async lookupEffects(idempotencyKey: string, signal?: AbortSignal): Promise<EffectReceipt[]> {
-    return (await this.call<{ effects: EffectReceipt[] }>('GET', `/__qa/effects?key=${encodeURIComponent(idempotencyKey)}`, undefined, signal)).effects;
+  async lookupEffects(idempotencyKey: string, signal?: AbortSignal): Promise<EffectLookup> {
+    const r = await this.call<{ effects: EffectReceipt[]; in_flight: number }>('GET', `/__qa/effects?key=${encodeURIComponent(idempotencyKey)}`, undefined, signal);
+    return { receipts: r.effects, in_flight: r.in_flight };
   }
 
   async version(signal?: AbortSignal): Promise<{ commit_sha: string }> {

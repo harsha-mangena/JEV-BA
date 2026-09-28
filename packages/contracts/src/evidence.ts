@@ -16,6 +16,7 @@ export const EvidenceEventKind = z.enum([
   'cleanup',
   'case_finished',
   'run_finished',
+  'intent_transition',
 ]);
 
 export const EvidenceEvent = z.object({

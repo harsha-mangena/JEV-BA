@@ -56,7 +56,7 @@ export class Store {
   readonly orders = new Map<string, Order>();
   readonly notes = new Map<string, Note>();
   /** Every state-changing application request that reached a handler (test oracle: backend effect count). */
-  readonly writes: Array<{ method: string; path: string; user_id: string | null; at: string }> = [];
+  readonly writes: Array<{ method: string; path: string; user_id: string | null; idempotency_key: string | null; at: string }> = [];
 
   createUser(role: Role, fixture_id: string | null): User {
     const id = `u_${randomUUID().slice(0, 8)}`;

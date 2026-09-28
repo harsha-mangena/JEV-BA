@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Browser } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { launchBrowser } from '@qa/browser';
@@ -43,9 +45,9 @@ async function run(s: Scenario, defects: DefectId[] = [], exploration?: Explorat
   const a: FixtureApp = await startFixtureApp({ fixtureToken: TOKEN, defects });
   const fixtures = new ProfileWitness(a.url, TOKEN);
   try {
-    const { report } = await runSuite({ scenarios: [s], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login', ...(exploration ? { exploration } : {}) });
+    const { report, runDir } = await runSuite({ scenarios: [s], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login', ...(exploration ? { exploration } : {}) });
     const writes = (path: string) => a.store.writes.filter((w) => w.path === path).length;
-    return { c: report.cases[0]!, writes, fixtures, app: a };
+    return { c: report.cases[0]!, writes, fixtures, app: a, runDir };
   } finally {
     await a.close();
   }
@@ -70,9 +72,15 @@ async function settings(steps: Scenario['milestones'][number]['steps'], mutation
 
 describe.concurrent('approved steps: effects come from the trusted contract', () => {
   it('positive control: a declared, authorized checkout submits exactly once', async () => {
-    const { c, writes } = await run(await checkout(() => undefined));
+    const { c, writes, app: a, runDir } = await run(await checkout(() => undefined));
     expect(c.verdict, c.message ?? '').toBe('PASS');
     expect(writes('/checkout')).toBe(1);
+    // The intent's idempotency key travels on the mutating request only, and the effect was confirmed from the application.
+    const submit = a.store.writes.find((w) => w.path === '/checkout')!;
+    expect(submit.idempotency_key).toMatch(new RegExp(`^${c.attempt_id.replace(/\./g, '\\.')}\\.i\\d+$`));
+    expect(a.store.writes.filter((w) => w.idempotency_key !== null)).toHaveLength(1);
+    const events = await readFile(join(runDir, c.artifacts.find((x) => x.kind === 'events')!.path), 'utf8');
+    expect(events).toContain('"state":"EFFECT_CONFIRMED"');
   });
 
   it('a known mutating control without its intent is denied before any input (missing_intent)', async () => {

@@ -10,3 +10,4 @@ export * from './impact.ts';
 export * from './review.ts';
 export * from './sweepers.ts';
 export * from './quota.ts';
+export * from './intents.ts';

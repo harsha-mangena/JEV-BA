@@ -9,6 +9,7 @@ import type { FixtureClient } from '@qa/oracles';
 import { runCaseAttempt } from './case.ts';
 import type { ExplorationOptions } from './exploration.ts';
 import type { AttemptHooks, QualityOptions } from './session.ts';
+import type { IntentStore } from './intents.ts';
 
 export interface SuiteOptions {
   scenarios: Scenario[];
@@ -37,6 +38,8 @@ export interface SuiteOptions {
   hooks?: AttemptHooks;
   quality?: QualityOptions;
   readOnly?: boolean;
+  /** Durable intent store shared by every attempt of this suite execution. */
+  intents?: IntentStore;
   /** Reads the target's deployed revision; defaults to the fixture service's version endpoint. */
   revision?: () => Promise<string | null>;
 }
@@ -130,7 +133,7 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
             continue;
           }
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.readOnly ? { readOnly: true } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.readOnly ? { readOnly: true } : {}), ...(o.intents ? { intents: o.intents } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
           }

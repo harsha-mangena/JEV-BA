@@ -26,6 +26,8 @@ export const ReasonCode = z.enum([
   'autonomy_abstained',
   'provider_unavailable',
   'visual_review_required',
+  /** A possibly-dispatched effect could not be established from the application; a human must inspect it. */
+  'effect_unreconciled',
 ]);
 export type ReasonCode = z.infer<typeof ReasonCode>;
 
