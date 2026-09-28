@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Browser, BrowserContext, Page, Route } from '@playwright/test';
+import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { EXECUTION_PROFILES, type StepOutcome } from '@qa/browser';
 import {
   authorizeAction,
@@ -148,6 +148,8 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
   let cleanup: CaseResult['cleanup'] = { status: s.cleanup === 'none' ? 'skipped' : 'pending' };
   let shotCount = 0;
   let owner: unknown;
+  /** Idempotency header for the dispatch in progress (read by the context route handler). */
+  let dispatchTag: { header: string; key: string } | null = null;
   const intents = o.intents ?? new MemoryIntentStore();
   // One signal for the whole attempt: run cancellation or the wall-clock deadline aborts in-flight adapter calls.
   const attemptSignal = AbortSignal.any([...(o.signal ? [o.signal] : []), AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
@@ -177,10 +179,17 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
 
     const allowed = resolveAllowedOrigins(o.policy, s.policy.allowed_origin_profile, new URL(o.baseUrl).origin);
     context = await o.browser.newContext({ ...EXECUTION_PROFILES[profile].options, baseURL: o.baseUrl });
+    const baseOrigin = new URL(o.baseUrl).origin;
+    // The only route handler: origin allow-list, plus the idempotency key of the dispatch in progress
+    // on its state-changing same-origin requests (a second, per-dispatch handler could race with it).
     await context.route('**/*', async (route) => {
       const req = route.request();
       const url = new URL(req.url());
-      if (url.protocol === 'data:' || url.protocol === 'blob:' || allowed.has(url.origin)) return route.continue();
+      if (url.protocol === 'data:' || url.protocol === 'blob:' || allowed.has(url.origin)) {
+        const tag = dispatchTag;
+        if (tag && req.method() !== 'GET' && url.origin === baseOrigin) return route.continue({ headers: { ...req.headers(), [tag.header]: tag.key } });
+        return route.continue();
+      }
       log.record('network_blocked', `blocked request to ${url.origin}`, { url: `${url.origin}${url.pathname}`, navigation: req.isNavigationRequest() });
       if (req.isNavigationRequest() && req.frame() === page?.mainFrame()) blockedNavigation = url.origin;
       return route.abort('blockedbyclient');
@@ -248,20 +257,12 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         await move('DISPATCHING');
         // The idempotency key travels only on this dispatch's state-changing same-origin requests.
         const header = adapter.capabilities.idempotency_header;
-        const origin = new URL(o.baseUrl).origin;
-        const tag = key && header
-          ? (route: Route) => {
-              const req = route.request();
-              if (req.method() !== 'GET' && new URL(req.url()).origin === origin) return route.continue({ headers: { ...req.headers(), [header]: key } });
-              return route.fallback();
-            }
-          : null;
-        if (tag) await p.route('**/*', tag);
+        dispatchTag = key && header ? { header, key } : null;
         let outcome: StepOutcome;
         try {
           outcome = await fn();
         } finally {
-          if (tag) await p.unroute('**/*', tag).catch(() => undefined);
+          dispatchTag = null;
         }
         log.record('intent', `${outcome.status}: ${intent.description}`, { intent_id: intent.intent_id, state: outcome.status === 'done' ? 'acknowledged' : outcome.status === 'not_dispatched' ? 'failed' : 'effect_unknown', detail: outcome.detail });
         if (outcome.status === 'not_dispatched') {
