@@ -79,6 +79,8 @@ export interface Session {
   readonly consoleErrors: string[];
   readonly completed: string[];
   readonly deadline: number;
+  /** Aborts on run cancellation or when the attempt deadline passes; pass it to every provider/adapter call. */
+  readonly signal: AbortSignal;
   resolveValue(ref: string): string;
   /** Throws Stop if navigation left the allowed origins, the run was cancelled, or the deadline passed. */
   checkpoint(): void;
@@ -212,6 +214,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       consoleErrors,
       completed,
       deadline,
+      signal: attemptSignal,
       resolveValue(ref) {
         const { scope, field } = parseRef(ref);
         if (!fx) throw new Stop('ERROR', 'fixture_error', `${ref} requested but the scenario has no fixture`);

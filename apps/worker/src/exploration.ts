@@ -31,7 +31,7 @@ async function ask(p: SystemOneProvider, req: S1Request, retries: number, sessio
   for (let i = 0; i <= retries; i++) {
     session.checkpoint();
     try {
-      return await p.ask(req, session.o.signal);
+      return await p.ask(req, session.signal);
     } catch (e) {
       last = e;
       session.log.record('decision', `provider request failed (attempt ${i + 1})`, { provider: p.id, error: (e as Error).message });
@@ -172,7 +172,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
               unmet_assertions: m.assertions.map((a) => a.type),
               environment_policy_summary: `environment=${o.environment}; mutations=${s.policy.mutations.join(',') || 'none'}; external_effects=${s.policy.external_effects}`,
               missing_information: decision.reason_codes,
-            })
+            }, session.signal)
             .catch((e: Error) => ({ kind: 'ABSTAIN', evidence_refs: [], reason: `S2 error: ${e.message}` }));
           const v = validateS2Proposal(proposalRaw, obs);
           log.record('decision', `s2 proposal ${v.ok ? v.proposal.kind : 'rejected'}`, v.ok ? { proposal: v.proposal } : { error: v.error });

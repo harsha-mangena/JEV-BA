@@ -13,7 +13,7 @@ const LANES = {
   service: { config: 'vitest.service.config.ts', requires: ['browser', 'postgres'] },
   audit: { config: 'vitest.audit.config.ts', requires: ['browser'] },
   isolation: { config: 'vitest.isolation.config.ts', requires: ['sandbox'] },
-  live: { config: 'vitest.live.config.ts', requires: ['provider-credentials'] },
+  live: { config: 'vitest.live.config.ts', requires: ['provider-credentials'], env: ['QA_S1_API_KEY'] },
 };
 
 const name = process.argv[2];
@@ -21,6 +21,15 @@ const lane = LANES[name];
 if (!lane) {
   console.error(`usage: run-lane <${Object.keys(LANES).join('|')}>`);
   process.exit(2);
+}
+// A lane whose external prerequisite is missing is BLOCKED: it is recorded, never run, never counted as passing.
+const missing = (lane.env ?? []).filter((k) => !process.env[k]);
+if (missing.length) {
+  const blocked = { lane: name, status: 'BLOCKED', missing_prerequisites: missing, requires: lane.requires ?? [], at: new Date().toISOString() };
+  mkdirSync(join('evidence', 'lanes'), { recursive: true });
+  writeFileSync(join('evidence', 'lanes', `${name}.json`), `${JSON.stringify(blocked, null, 2)}\n`);
+  console.log(`lane ${name}: BLOCKED (missing ${missing.join(', ')}) → evidence/lanes/${name}.json`);
+  process.exit(3);
 }
 const sh = (c) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
 const started = new Date();
@@ -50,6 +59,7 @@ if (lane.kind !== 'tsc') {
 }
 const manifest = {
   lane: name,
+  status: result.status === 0 ? 'PASSED' : 'FAILED',
   code_sha: sh('git rev-parse HEAD'),
   dirty: (sh('git status --porcelain') ?? '').length > 0,
   command,

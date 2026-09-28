@@ -1,11 +1,11 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { buildApi } from '@qa/api';
 import { Db } from '@qa/db';
 import { bootstrapProject, depsFromEnv, JobWorker, Orchestrator, type Role } from '@qa/orchestrator';
 import { CalibrationRegistry, withCalibration } from '@qa/calibration';
 import { HEURISTIC_GATE_V0 } from '@qa/gate';
-import { HttpS1Provider, probeRequest, TypeSafeProvider, validateResponse, type SystemOneProvider } from '@qa/s1';
+import { HttpS1Provider, probeProvider, TYPESAFE_CONTRACT, TypeSafeProvider, type SystemOneProvider } from '@qa/s1';
 
 export interface ServiceArgs {
   [k: string]: string | string[] | boolean | undefined;
@@ -162,14 +162,26 @@ export async function wait(a: ServiceArgs): Promise<number> {
   }
 }
 
-/** S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_ENDPOINT, QA_S1_API_KEY, QA_S1_MODEL. */
-export function s1FromEnv(): { provider: SystemOneProvider; model: string } | null {
+/**
+ * S1 provider from environment: QA_S1_PROVIDER=typesafe|http, QA_S1_API_KEY,
+ * QA_S1_MODEL (typesafe default jev-latest), QA_S1_ENDPOINT (typesafe default
+ * is the official endpoint), QA_S1_TIMEOUT_MS, QA_S1_RETRIES.
+ */
+export function s1FromEnv(): { provider: SystemOneProvider; model: string; endpoint: string } | null {
   const kind = process.env.QA_S1_PROVIDER;
   if (!kind) return null;
-  const endpoint = need(process.env.QA_S1_ENDPOINT, 'QA_S1_ENDPOINT');
-  const model = need(process.env.QA_S1_MODEL, 'QA_S1_MODEL');
-  if (kind === 'typesafe') return { provider: new TypeSafeProvider({ endpoint, apiKey: need(process.env.QA_S1_API_KEY, 'QA_S1_API_KEY') }), model };
-  if (kind === 'http') return { provider: new HttpS1Provider('http', { endpoint, ...(process.env.QA_S1_API_KEY ? { apiKey: process.env.QA_S1_API_KEY } : {}) }), model };
+  const transport = {
+    ...(process.env.QA_S1_TIMEOUT_MS ? { timeoutMs: Number(process.env.QA_S1_TIMEOUT_MS) } : {}),
+    ...(process.env.QA_S1_RETRIES ? { retries: Number(process.env.QA_S1_RETRIES) } : {}),
+  };
+  if (kind === 'typesafe') {
+    const endpoint = process.env.QA_S1_ENDPOINT ?? TYPESAFE_CONTRACT.endpoint;
+    return { provider: new TypeSafeProvider({ endpoint, apiKey: need(process.env.QA_S1_API_KEY, 'QA_S1_API_KEY'), ...transport }), model: process.env.QA_S1_MODEL ?? TYPESAFE_CONTRACT.default_model, endpoint };
+  }
+  if (kind === 'http') {
+    const endpoint = need(process.env.QA_S1_ENDPOINT, 'QA_S1_ENDPOINT');
+    return { provider: new HttpS1Provider('http', { endpoint, ...(process.env.QA_S1_API_KEY ? { apiKey: process.env.QA_S1_API_KEY } : {}), ...transport }), model: need(process.env.QA_S1_MODEL, 'QA_S1_MODEL'), endpoint };
+  }
   throw new UsageError(`unknown QA_S1_PROVIDER ${kind}`);
 }
 
@@ -180,17 +192,19 @@ async function explorationFromEnv() {
   return { s1: s1.provider, model: s1.model, gate: withCalibration(HEURISTIC_GATE_V0, cal) };
 }
 
-/** Send a tiny request and validate the response strictly — run before enabling autonomy. */
+/**
+ * Send a tiny request and validate the response strictly — run before enabling
+ * autonomy. Writes a compatibility record (QA_S1_COMPAT_RECORD, if set) and
+ * exits non-zero unless every head validates.
+ */
 export async function s1Probe(): Promise<number> {
   const s1 = s1FromEnv();
-  if (!s1) throw new UsageError('set QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL (and QA_S1_API_KEY)');
-  const req = probeRequest(s1.model);
-  const started = Date.now();
-  const raw = await s1.provider.ask(req);
-  const v = validateResponse(req, raw);
-  console.log(JSON.stringify({ provider: s1.provider.id, resolved_model: v.resolvedModel, elapsed_ms: Date.now() - started, valid_heads: Object.keys(v.answers), invalid_heads: v.invalid, op: v.answers.op?.distribution ?? null }, null, 2));
-  if (Object.keys(v.invalid).length) {
-    console.error('Contract mismatch: fix the adapter mapping before enabling autonomy.');
+  if (!s1) throw new UsageError('set QA_S1_PROVIDER and QA_S1_API_KEY (and QA_S1_MODEL/QA_S1_ENDPOINT for http)');
+  const rec = await probeProvider(s1.provider, s1.endpoint, s1.model);
+  console.log(JSON.stringify(rec, null, 2));
+  if (process.env.QA_S1_COMPAT_RECORD) await writeFile(process.env.QA_S1_COMPAT_RECORD, `${JSON.stringify(rec, null, 2)}\n`);
+  if (!rec.ok) {
+    console.error(rec.error ? `Provider unreachable: ${rec.error}` : 'Contract mismatch: fix the adapter mapping before enabling autonomy.');
     return 1;
   }
   return 0;

@@ -64,6 +64,11 @@ export function validateResponse(req: S1Request, raw: S1RawResponse): Validation
   }
   for (const q of req.questions) {
     const keys = q.kind === 'choice' ? q.options.map((o) => o.key) : ['true'];
+    const adapterError = raw.answers[q.id]?.error;
+    if (adapterError) {
+      invalid[q.id] = adapterError;
+      continue;
+    }
     if (q.kind === 'noul') {
       const p = raw.answers[q.id]?.probabilities?.true;
       if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) invalid[q.id] = 'invalid noul probability';
