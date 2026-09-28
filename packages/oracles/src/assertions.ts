@@ -1,8 +1,8 @@
 import type { Page } from '@playwright/test';
 import { describeLocator, parseRef, type Assertion, type AssertionResult } from '@qa/contracts';
-import { pollUntil, resolveLocator } from '@qa/browser';
+import { pollUntil, resolveLocator, safeScreenshot, type PrivacyOptions } from '@qa/browser';
 import type { FixtureClient, OwnedOrder } from './fixture-client.ts';
-import { atOrAbove, captureCheckpoint, checkLayout, compareImages, diffSignature, focusIndicator, isFocused, renderingProfile, reviewDiff, scanAccessibility, type BaselineStore, type FindingLedger, type VisualReviewer } from '@qa/quality';
+import { atOrAbove, captureCheckpoint, settleForCapture, checkLayout, compareImages, diffSignature, focusIndicator, isFocused, renderingProfile, reviewDiff, scanAccessibility, type BaselineStore, type FindingLedger, type VisualReviewer } from '@qa/quality';
 import { createHash } from 'node:crypto';
 
 export interface EntityBaseline {
@@ -28,6 +28,8 @@ export interface Attachment {
 
 export interface AssertionContext {
   quality?: QualityContext;
+  /** When set, checkpoint images are captured only with every sensitive region masked (else withheld). */
+  privacy?: PrivacyOptions;
   /** Navigation authorization for assertions that re-load a page (defaults to allowed for standalone use). */
   authorizeNavigation?(path: string): boolean;
   page: Page;
@@ -197,7 +199,14 @@ function recordFinding(ctx: AssertionContext, kind: 'a11y' | 'layout' | 'visual_
 
 async function visualMatch(a: Extract<Assertion, { type: 'visual_match' }>, ctx: AssertionContext): Promise<Evaluation> {
   const q = ctx.quality;
-  const png = await captureCheckpoint(ctx.page, a.mask.map((m) => resolveLocator(ctx.page, m)), a.full_page);
+  const declared = a.mask.map((m) => resolveLocator(ctx.page, m));
+  let png: Buffer;
+  if (ctx.privacy) {
+    await settleForCapture(ctx.page);
+    const shot = await safeScreenshot(ctx.page, { ...ctx.privacy, fullPage: a.full_page, extraMask: declared, stable: true });
+    if (!shot.ok) return { type: a.type, status: 'needs_review', expected: { checkpoint: a.checkpoint }, message: `checkpoint image withheld: ${shot.withheld}` };
+    png = shot.png;
+  } else png = await captureCheckpoint(ctx.page, declared, a.full_page);
   const candidateSha = createHash('sha256').update(png).digest('hex');
   const candidate: Attachment = { kind: 'visual_candidate', name: `visual/${a.checkpoint}.candidate.png`, bytes: png };
   if (!q?.baselines) {

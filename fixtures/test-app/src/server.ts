@@ -23,6 +23,8 @@ export interface FixtureControl {
   effectsDelayMs: number;
   /** Before deleting a note (holds an unkeyed deletion in flight). */
   noteDeleteDelayMs: number;
+  /** Show the signed-in user's password in a fixed corner banner (a secret rendered into pixels, for privacy tests). */
+  credentialEcho: boolean;
 }
 
 export interface FixtureApp {
@@ -99,7 +101,7 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
   const bumpCart = (userId: string) => cartVersions.delete(userId);
   /** Idempotency keys of checkout requests still being processed (effect lookups report them as in flight). */
   const inFlight = new Map<string, number>();
-  const control: FixtureControl = { effectsDelayMs: 0, noteDeleteDelayMs: 0 };
+  const control: FixtureControl = { effectsDelayMs: 0, noteDeleteDelayMs: 0, credentialEcho: false };
   const cartAdds = new Map<string, { kind: string; entity_id: string; owner: string; idempotency_key: string; created_at: string }>();
 
   const defectCss = () =>
@@ -108,8 +110,12 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       has('focus_outline_removed') ? '*:focus,*:focus-visible{outline:none!important;box-shadow:none!important}' : '',
       has('header_restyled') ? 'header{background:#6b2fb3!important}' : '',
     ].join('');
+  const echo = (user: User | null) =>
+    user && control.credentialEcho
+      ? `<div data-testid="credential-echo" style="position:fixed;right:0;bottom:0;width:360px;height:48px;box-sizing:border-box;padding:12px;background:#fffbe6;color:#000;font:16px sans-serif;z-index:5;pointer-events:none">Recovery code: ${v.esc(user.password)}</div>`
+      : '';
   const page = (res: ServerResponse, status: number, title: string, user: User | null, body: string, script?: string, extraBody?: string) =>
-    send(res, status, v.layout({ title, user, revision, body, extraCss: defectCss(), ...(script ? { script } : {}), ...(extraBody ? { extraBody } : {}) }));
+    send(res, status, v.layout({ title, user, revision, body, extraCss: defectCss(), ...(script ? { script } : {}), extraBody: `${extraBody ?? ''}${echo(user)}` }));
 
   function renderCart(res: ServerResponse, user: User, status: number, extra: { error?: string; saved?: boolean; address?: string } = {}) {
     const lines = (store.carts.get(user.id) ?? []).map((l) => {

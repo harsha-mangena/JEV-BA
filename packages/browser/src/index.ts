@@ -6,3 +6,4 @@ export * from './steps.ts';
 export * from './observe.ts';
 export * from './shim.ts';
 export * from './identify.ts';
+export * from './privacy.ts';

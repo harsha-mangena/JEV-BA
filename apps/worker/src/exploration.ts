@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ElementHandle } from '@playwright/test';
-import { OBSERVATION_EXTRACTOR_VERSION, observe, resolveNode } from '@qa/browser';
+import { OBSERVATION_EXTRACTOR_VERSION, observe, resolveNode, safeScreenshot } from '@qa/browser';
 import { digestConfig, type DecisionConfig } from '@qa/calibration';
 import type { AuthorizationDecision, Observation, ObservedElement, Operation } from '@qa/contracts';
 import { autonomyMode, evaluateGate, HEURISTIC_GATE_V0, type GateConfig, type GateDecision, type GateInput } from '@qa/gate';
@@ -54,9 +54,16 @@ const fingerprint = (o: Observation) =>
     .update(JSON.stringify([o.document_id, o.route, o.messages, o.candidates.map((c) => [c.node_id, c.name, c.value, c.enabled, c.checked, c.in_viewport])]))
     .digest('hex');
 
-/** Screenshot for a vision-capable S2, with password inputs masked. */
+/**
+ * Screenshot for a vision-capable S2, sent only when every registered secret,
+ * declared region and uninspectable element could be masked; otherwise the
+ * model gets no image at all.
+ */
 async function maskedScreenshot(session: Session): Promise<Buffer | undefined> {
-  return session.page.screenshot({ type: 'png', mask: [session.page.locator('input[type=password]')] }).catch(() => undefined);
+  const shot = await safeScreenshot(session.page, session.privacy());
+  if (shot.ok) return shot.png;
+  session.log.record('decision', `s2 screenshot withheld: ${shot.withheld}`, { withheld: true, reason: shot.withheld });
+  return undefined;
 }
 
 /**
@@ -222,7 +229,7 @@ export function explorationDriver(x: ExplorationOptions): Driver {
           for (;;) {
             if (s2Calls >= s.budgets.max_s2_calls) throw new Stop('NEEDS_REVIEW', 'budget_exhausted', `${m.id}: System Two budget (${s.budgets.max_s2_calls}) exhausted`);
             s2Calls++;
-            if (screenshot) log.record('decision', 's2 screenshot attached', { sha256: createHash('sha256').update(screenshot).digest('hex'), bytes: screenshot.length, masked: 'input[type=password]' });
+            if (screenshot) log.record('decision', 's2 screenshot attached', { sha256: createHash('sha256').update(screenshot).digest('hex'), bytes: screenshot.length, masked: 'registered secrets, declared regions and uninspectable content' });
             const proposalRaw = await x.s2
               .propose(
                 {

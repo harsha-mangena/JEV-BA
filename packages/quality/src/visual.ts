@@ -155,10 +155,15 @@ export async function renderingProfile(page: Page): Promise<string> {
 /** Another approval changed the baseline since the reviewer saw it (compare-and-set failure). */
 export class BaselineConflict extends Error {}
 
-/** Wait for a stable view, then capture with animations disabled, caret hidden and declared regions masked. */
-export async function captureCheckpoint(page: Page, mask: PwLocator[], fullPage: boolean): Promise<Buffer> {
+/** Wait for network quiet and loaded fonts, so a capture reflects a settled view. */
+export async function settleForCapture(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
+}
+
+/** Wait for a stable view, then capture with animations disabled, caret hidden and declared regions masked. */
+export async function captureCheckpoint(page: Page, mask: PwLocator[], fullPage: boolean): Promise<Buffer> {
+  await settleForCapture(page);
   return page.screenshot({ fullPage, animations: 'disabled', caret: 'hide', mask, maskColor: '#FF00FF', scale: 'css' });
 }
 

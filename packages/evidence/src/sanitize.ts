@@ -76,6 +76,23 @@ export interface SanitizedArchive {
   redactedEntries: string[];
   /** Secrets still detectable after sanitization; a non-zero value means the archive must be withheld. */
   residualHits: number;
+  /** Image entries omitted: pixels cannot be proven free of secrets by byte redaction. */
+  omittedImages: string[];
+}
+
+/** Raster/vector image content by signature (not by name: trace resources are content-addressed). */
+export function isImage(b: Buffer): boolean {
+  if (b.length < 4) return false;
+  const head = b.subarray(0, 16).toString('latin1');
+  return (
+    (b[0] === 0x89 && head.slice(1, 4) === 'PNG') ||
+    (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) || // JPEG
+    head.startsWith('GIF8') ||
+    (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') ||
+    head.startsWith('BM') ||
+    head.slice(4, 12) === 'ftypavif' ||
+    /^\s*(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(b.subarray(0, 256).toString('utf8'))
+  );
 }
 
 /**
@@ -86,7 +103,11 @@ export interface SanitizedArchive {
  * re-scanned; callers must withhold the archive if anything remains.
  */
 export function sanitizeTraceArchive(zip: Buffer, secrets: string[]): SanitizedArchive {
-  const entries = readZip(zip);
+  const all = readZip(zip);
+  // A trace is published as a sanitized derivative: DOM snapshots, actions and network logs (text, redacted
+  // below) without any image resource — screencast frames or page images could show a secret as pixels.
+  const omittedImages = all.filter((e) => isImage(e.data)).map((e) => e.name);
+  const entries = all.filter((e) => !omittedImages.includes(e.name));
   const redactedEntries: string[] = [];
   const out = entries.map((e) => {
     let data = e.data;
@@ -97,5 +118,5 @@ export function sanitizeTraceArchive(zip: Buffer, secrets: string[]): SanitizedA
   });
   const bytes = writeZip(out);
   const residualHits = out.reduce((n, e) => n + canaryHits(e.data, secrets), 0) + canaryHits(bytes, secrets);
-  return { bytes, entries: out.length, redactedEntries, residualHits };
+  return { bytes, entries: out.length, redactedEntries, residualHits, omittedImages };
 }
