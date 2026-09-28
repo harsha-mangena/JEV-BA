@@ -380,8 +380,9 @@ export class JobWorker {
     if (!gate || autonomyMode(gate) !== 'calibrated') return gate;
     const cal = gate.calibrated;
     const q = cal && this.orch.deps.qualifications ? await this.orch.deps.qualifications.find({ project_id: projectId, environment, application, resolved_model: cal.model ?? '' }, { id: cal.version_id, decision_config_digest: cal.decision_config_digest }).catch(() => null) : null;
-    if (q) return gate;
-    this.log(`calibrated autonomy is not qualified for ${projectId}/${environment} (${application}); running exploration in shadow mode`);
+    // The grant is time-bounded: the gate re-checks its expiry at every decision, so a long shard cannot outlive it.
+    if (q && cal) return { ...gate, calibrated: { ...cal, authorized_until: q.expires_at ?? null } };
+    this.log(`calibrated autonomy is not qualified (or no longer qualified) for ${projectId}/${environment} (${application}); running exploration in shadow mode`);
     return { ...gate, mode: 'shadow' };
   }
 

@@ -56,6 +56,31 @@ export interface QualificationRecord {
   evidence_summary: Record<string, unknown>;
   criteria: QualificationCriteria;
   decided_at: string;
+  /**
+   * End of the authorization (re-audit R5): the qualification is only as
+   * fresh as its live provider-compatibility evidence, so it expires
+   * `max_compat_age_days` after that evidence was checked. Enforced on every
+   * lookup, never only at qualification time. Null when not qualified.
+   */
+  expires_at: string | null;
+}
+
+export interface Revocation {
+  qualification_id: string;
+  revoked_by: string;
+  reason: string;
+  revoked_at: string;
+}
+
+/** Why a stored record does not authorize calibrated dispatch right now (empty → it does). */
+export function authorizationProblems(r: QualificationRecord, now: Date, revoked: boolean): string[] {
+  const out: string[] = [];
+  if (r.state !== 'QUALIFIED_FOR_PROFILE') out.push(`state is ${r.state}`);
+  if (revoked) out.push('revoked');
+  const exp = r.expires_at ? Date.parse(r.expires_at) : NaN;
+  if (!Number.isFinite(exp)) out.push('no valid expiry');
+  else if (now.getTime() >= exp) out.push(`expired at ${r.expires_at}`);
+  return out;
 }
 
 export function qualify(profile: QualificationProfile, e: QualificationEvidence, c: QualificationCriteria = DEFAULT_QUALIFICATION_CRITERIA, now = new Date()): QualificationRecord {
@@ -84,6 +109,7 @@ export function qualify(profile: QualificationProfile, e: QualificationEvidence,
     if (!(age <= c.max_compat_age_days)) live.push(`the provider compatibility record is ${Number.isFinite(age) ? age.toFixed(1) : 'of unknown age'} days old (max ${c.max_compat_age_days})`);
   }
   const state: QualificationState = blocked.length ? 'BLOCKED' : live.length ? 'LIVE_VERIFICATION_REQUIRED' : 'QUALIFIED_FOR_PROFILE';
+  const expiresAt = state === 'QUALIFIED_FOR_PROFILE' ? new Date(Date.parse(e.provider_compat!.checked_at) + c.max_compat_age_days * 86_400_000).toISOString() : null;
   return {
     id: `qual_${cal.id}_${profile.project_id}_${profile.environment}`.replace(/[^a-zA-Z0-9_.-]/g, '_'),
     profile,
@@ -101,12 +127,22 @@ export function qualify(profile: QualificationProfile, e: QualificationEvidence,
     },
     criteria: c,
     decided_at: now.toISOString(),
+    expires_at: expiresAt,
   };
 }
 
-/** File registry of qualification decisions (append-only history, one current record per profile). */
+/**
+ * File registry of qualification decisions (append-only history, one current
+ * record per profile) with revocations. Authorization is time-bounded:
+ * `find` returns a record only while it is qualified, unexpired and not
+ * revoked at the registry clock's current time; corrupt or unreadable records
+ * never authorize anything.
+ */
 export class QualificationRegistry {
-  constructor(readonly dir: string) {}
+  constructor(
+    readonly dir: string,
+    private readonly clock: () => Date = () => new Date(),
+  ) {}
 
   async save(r: QualificationRecord): Promise<void> {
     await mkdir(join(this.dir, 'history'), { recursive: true });
@@ -114,23 +150,78 @@ export class QualificationRegistry {
     await writeFile(join(this.dir, `${r.id}.json`), JSON.stringify(r, null, 2));
   }
 
+  /** Readable current records (corrupt files are skipped: they authorize nothing). */
   async all(): Promise<QualificationRecord[]> {
     const files = (await readdir(this.dir).catch(() => [] as string[])).filter((f) => f.endsWith('.json'));
-    return Promise.all(files.map(async (f) => JSON.parse(await readFile(join(this.dir, f), 'utf8')) as QualificationRecord));
+    const out: QualificationRecord[] = [];
+    for (const f of files) {
+      try {
+        const r = JSON.parse(await readFile(join(this.dir, f), 'utf8')) as QualificationRecord;
+        if (r && typeof r === 'object' && typeof r.id === 'string' && r.profile && typeof r.calibration_id === 'string') out.push(r);
+      } catch {
+        /* unreadable: never authorizes */
+      }
+    }
+    return out;
   }
 
-  /** The qualification that allows `calibration` to act for this profile, or null. */
-  async find(profile: QualificationProfile, calibration: Pick<CalibrationVersion, 'id' | 'decision_config_digest'>): Promise<QualificationRecord | null> {
-    const hit = (await this.all()).find(
-      (r) =>
-        r.state === 'QUALIFIED_FOR_PROFILE' &&
-        r.calibration_id === calibration.id &&
-        r.decision_config_digest === calibration.decision_config_digest &&
-        r.profile.project_id === profile.project_id &&
-        r.profile.environment === profile.environment &&
-        r.profile.application === profile.application &&
-        r.profile.resolved_model === profile.resolved_model,
+  async revoke(qualificationId: string, by: string, reason: string): Promise<Revocation> {
+    if (!by.trim() || !reason.trim()) throw new Error('a revocation names who revoked and why');
+    const rev: Revocation = { qualification_id: qualificationId, revoked_by: by, reason, revoked_at: this.clock().toISOString() };
+    await mkdir(join(this.dir, 'revocations'), { recursive: true });
+    await writeFile(join(this.dir, 'revocations', `${qualificationId}.json`), JSON.stringify(rev, null, 2));
+    return rev;
+  }
+
+  async isRevoked(qualificationId: string): Promise<boolean> {
+    // Fail closed: a revocation file that exists but cannot be read still revokes.
+    return readFile(join(this.dir, 'revocations', `${qualificationId}.json`), 'utf8').then(
+      () => true,
+      (e: NodeJS.ErrnoException) => e.code !== 'ENOENT',
     );
-    return hit ?? null;
+  }
+
+  /** The qualification that allows `calibration` to act for this profile right now, or null. */
+  async find(profile: QualificationProfile, calibration: Pick<CalibrationVersion, 'id' | 'decision_config_digest'>): Promise<QualificationRecord | null> {
+    const now = this.clock();
+    for (const r of await this.all()) {
+      if (
+        r.calibration_id !== calibration.id ||
+        r.decision_config_digest !== calibration.decision_config_digest ||
+        r.profile.project_id !== profile.project_id ||
+        r.profile.environment !== profile.environment ||
+        r.profile.application !== profile.application ||
+        r.profile.resolved_model !== profile.resolved_model
+      )
+        continue;
+      if (authorizationProblems(r, now, await this.isRevoked(r.id)).length === 0) return r;
+    }
+    return null;
+  }
+
+  /**
+   * Extend a qualification with fresh live compatibility evidence. Only a
+   * probe that validated against the exact qualified model renews it; the
+   * renewal is a new record in history. Anything else leaves the (expiring)
+   * record as it is and says why.
+   */
+  async renew(qualificationId: string, compat: NonNullable<QualificationEvidence['provider_compat']>): Promise<{ renewed: true; record: QualificationRecord } | { renewed: false; reason: string }> {
+    const r = (await this.all()).find((x) => x.id === qualificationId);
+    if (!r) return { renewed: false, reason: 'no such qualification' };
+    if (r.state !== 'QUALIFIED_FOR_PROFILE') return { renewed: false, reason: `qualification is ${r.state}` };
+    if (await this.isRevoked(r.id)) return { renewed: false, reason: 'qualification is revoked' };
+    if (!compat.ok) return { renewed: false, reason: 'the live provider probe did not validate' };
+    if (compat.resolved_model !== r.profile.resolved_model) return { renewed: false, reason: `the live provider resolved ${compat.resolved_model ?? 'no model'}, not ${r.profile.resolved_model}` };
+    const now = this.clock();
+    const checked = Date.parse(compat.checked_at);
+    if (!Number.isFinite(checked) || checked > now.getTime() || now.getTime() - checked > r.criteria.max_compat_age_days * 86_400_000) return { renewed: false, reason: 'the compatibility evidence is not current' };
+    const record: QualificationRecord = {
+      ...r,
+      evidence_summary: { ...r.evidence_summary, provider_compat: compat },
+      decided_at: now.toISOString(),
+      expires_at: new Date(checked + r.criteria.max_compat_age_days * 86_400_000).toISOString(),
+    };
+    await this.save(record);
+    return { renewed: true, record };
   }
 }

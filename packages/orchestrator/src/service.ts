@@ -42,7 +42,7 @@ export interface OrchestratorDeps {
    * (project, environment, application contract, model) qualified for the
    * calibration in use; otherwise exploration is downgraded to shadow mode.
    */
-  qualifications?: { find(profile: { project_id: string; environment: string; application: string; resolved_model: string }, calibration: { id: string; decision_config_digest: string }): Promise<unknown | null> };
+  qualifications?: { find(profile: { project_id: string; environment: string; application: string; resolved_model: string }, calibration: { id: string; decision_config_digest: string }): Promise<{ expires_at: string | null } | null> };
   /** Wraps the exploration S1 provider per tenant (quotas, circuit breaking). */
   s1For?(tenantId: string, inner: SystemOneProvider): SystemOneProvider;
 }
