@@ -6,7 +6,7 @@ import { DeploymentVerificationError, type DeploymentClaim, type DeploymentVerif
 import type { ArtifactStore } from '@qa/evidence';
 import type { BaselineStore, VisualReviewer } from '@qa/quality';
 import type { SystemOneProvider } from '@qa/s1';
-import { loadSuite, selectFullSuite, type LoadedSuite } from './suite.ts';
+import { canonicalJson, contractChanges, loadSuite, resolveExecution, selectFullSuite, selectionDigest, type LoadedSuite, type ResolvedExecution } from './suite.ts';
 import { describeObligation, OBLIGATION_PREFIX, outstandingObligations } from './intents.ts';
 import { validateAdjudication, type Adjudication, type IntentRecord } from '@qa/worker';
 import { ApiError, canSeeProject, requireRole, type Principal, type ProjectRow, type RunRow } from './types.ts';
@@ -186,8 +186,15 @@ export class Orchestrator {
       baseline_sha: baseline?.commit_sha ?? null,
     });
     if (envCfg.read_only) restrictToReadOnly(manifest, suite);
+    let exec: ResolvedExecution;
+    try {
+      exec = await this.resolveExecution(project, verified.environment, suite);
+    } catch (e) {
+      return reject(500, 'execution_contract_unresolved', (e as Error).message);
+    }
+    manifest.suite_revision = exec.revision;
     const profileSet = [...new Set(manifest.cases.map((c) => c.execution_profile))].sort().join('+') || 'none';
-    const dedupKey = executionDedupKey({ tenant_id: project.tenant_id, project_id: project.id, provider: input.provider, deployment_id: verified.deployment_id, suite_revision: suite.revision, execution_profile: profileSet });
+    const dedupKey = executionDedupKey({ tenant_id: project.tenant_id, project_id: project.id, provider: input.provider, deployment_id: verified.deployment_id, suite_revision: exec.revision, execution_profile: profileSet });
 
     return this.db.tx(async (c) => {
       const dep = await c.query<{ id: string; commit_sha: string; immutable_url: string }>(
@@ -203,10 +210,10 @@ export class Orchestrator {
       }
       const runId = newId('run');
       const inserted = await c.query<RunRow>(
-        `insert into runs(id, tenant_id, project_id, deployment_id, environment, commit_sha, suite_revision, execution_profile, dedup_key, state, selection_manifest, execution_snapshot, generation)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WAITING_READY',$10,$11,
+        `insert into runs(id, tenant_id, project_id, deployment_id, environment, commit_sha, suite_revision, execution_profile, dedup_key, state, selection_manifest, execution_snapshot, selection_digest, generation)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WAITING_READY',$10,$11,$12,
                  (select coalesce(max(generation), 0) + 1 from runs where project_id=$3 and environment=$5)) on conflict (dedup_key) do nothing returning *`,
-        [runId, project.tenant_id, project.id, deployment.id, verified.environment, verified.commit_sha, suite.revision, profileSet, dedupKey, JSON.stringify(manifest), JSON.stringify(suite.snapshot)],
+        [runId, project.tenant_id, project.id, deployment.id, verified.environment, verified.commit_sha, exec.revision, profileSet, dedupKey, JSON.stringify(manifest), JSON.stringify(exec.contract), selectionDigest(manifest)],
       );
       const deduplicated = inserted.rowCount === 0;
       const run = deduplicated ? (await c.query<RunRow>('select * from runs where dedup_key=$1', [dedupKey])).rows[0]! : inserted.rows[0]!;
@@ -224,7 +231,7 @@ export class Orchestrator {
         }
         await c.query('insert into jobs(tenant_id, run_id, kind, payload) values ($1,$2,$3,$4)', [project.tenant_id, run.id, 'readiness', JSON.stringify({ attempt: 1 })]);
         await this.enqueueStatus(c, project.tenant_id, run.id);
-        await this.audit(c, p, 'run.created', run.id, { deployment: verified.deployment_id, sha: verified.commit_sha, suite: suite.revision, superseded: superseded.rows.map((r) => r.id) });
+        await this.audit(c, p, 'run.created', run.id, { deployment: verified.deployment_id, sha: verified.commit_sha, revision: exec.revision, selection: selectionDigest(manifest), superseded: superseded.rows.map((r) => r.id) });
       }
       return { run_id: run.id, state: run.state, deduplicated, note: 'accepted for testing; this is not a QA result — wait for the required check' };
     });
@@ -269,17 +276,53 @@ export class Orchestrator {
     if (!['COMPLETED', 'ERROR', 'CANCELLED'].includes(run.state)) throw new ApiError(409, 'not_retryable', `cannot retry a run in state ${run.state}`);
     const current = await this.db.one<{ id: string }>('select id from deployments where project_id=$1 and environment=$2 order by created_at desc limit 1', [run.project_id, run.environment]);
     if (current?.id !== run.deployment_id) throw new ApiError(409, 'not_current', 'a newer deployment exists; retrying an old deployment cannot affect its gate');
+    // A retry is a new execution: it runs under the execution contract as it stands now (e.g. a newly approved
+    // baseline), never under a stale one. A changed suite needs a fresh selection, i.e. a new submission.
+    const project = await this.visibleProject(p, run.project_id);
+    const exec = await this.resolveExecution(project, run.environment).catch((e: Error) => {
+      throw new ApiError(409, 'execution_contract_unresolved', e.message);
+    });
+    const prior = run.execution_snapshot as { suite?: unknown } | undefined;
+    if (canonicalJson(prior?.suite) !== canonicalJson(exec.contract.suite)) throw new ApiError(409, 'suite_changed', 'the suite changed since this run was selected; submit the deployment again for a fresh selection');
+    const dep = (await this.db.one<{ provider: string; provider_deployment_id: string }>('select provider, provider_deployment_id from deployments where id=$1', [run.deployment_id]))!;
+    const dedupKey = executionDedupKey({ tenant_id: run.tenant_id, project_id: run.project_id, provider: dep.provider, deployment_id: dep.provider_deployment_id, suite_revision: exec.revision, execution_profile: run.execution_profile });
+    const manifest = { ...run.selection_manifest!, suite_revision: exec.revision };
     return this.db.tx(async (c) => {
-      const r = await c.query<RunRow>(
-        `update runs set attempt=attempt+1, state='WAITING_READY', gate=null, reason=null, message=null, cancel_requested=false, completed_at=null, updated_at=now() where id=$1 and state=$2 returning *`,
-        [id, run.state],
-      );
+      const r = await c
+        .query<RunRow>(
+          `update runs set attempt=attempt+1, state='WAITING_READY', gate=null, reason=null, message=null, cancel_requested=false, completed_at=null, updated_at=now(),
+                  suite_revision=$3, execution_snapshot=$4, dedup_key=$5, selection_manifest=$6, selection_digest=$7
+           where id=$1 and state=$2 returning *`,
+          [id, run.state, exec.revision, JSON.stringify(exec.contract), dedupKey, JSON.stringify(manifest), selectionDigest(manifest)],
+        )
+        .catch((e: { code?: string }) => {
+          throw e.code === '23505' ? new ApiError(409, 'duplicate_execution', 'another run already executes this deployment under the current contract') : e;
+        });
       if (r.rowCount === 0) throw new ApiError(409, 'conflict', 'run changed concurrently');
       await c.query('insert into jobs(tenant_id, run_id, kind, payload) values ($1,$2,$3,$4)', [run.tenant_id, id, 'readiness', JSON.stringify({ attempt: r.rows[0]!.attempt })]);
       await this.enqueueStatus(c, run.tenant_id, id);
       await this.audit(c, p, 'run.retry', id, { reason, attempt: r.rows[0]!.attempt });
       return r.rows[0]!;
     });
+  }
+
+  /** The execution contract as it stands now for this project and environment (frozen baselines included). */
+  async resolveExecution(project: ProjectRow, environment: string, suite?: LoadedSuite): Promise<ResolvedExecution> {
+    return resolveExecution(project.config, environment, suite ?? (await loadSuite(project.config, this.deps.suiteBaseDir)), { baselines: this.deps.baselinesFor?.(project) ?? null });
+  }
+
+  /**
+   * Why a run's results no longer apply: its execution contract differs from
+   * the current one (any verdict-relevant setting), or its selection manifest
+   * no longer matches the identity frozen at submission.
+   */
+  async staleness(project: ProjectRow, environment: string, run: Pick<RunRow, 'suite_revision' | 'execution_snapshot' | 'selection_manifest' | 'selection_digest'>): Promise<string[]> {
+    const out: string[] = [];
+    const now = await this.resolveExecution(project, environment).catch((e: Error) => e);
+    if (now instanceof Error) out.push(`suite or policy changed since the run; results are stale (the current execution contract cannot be resolved: ${now.message})`);
+    else if (now.revision !== run.suite_revision) out.push(`suite or policy changed since the run; results are stale (execution contract ${run.suite_revision} → ${now.revision}: ${contractChanges(run.execution_snapshot, now.contract).join('; ') || 'changed'})`);
+    if (run.selection_digest && (!run.selection_manifest || selectionDigest(run.selection_manifest) !== run.selection_digest)) out.push('the selection manifest does not match the identity frozen at submission');
+    return out;
   }
 
   /**
@@ -301,8 +344,7 @@ export class Orchestrator {
     const run = await this.db.one<RunRow>('select * from runs where deployment_id=$1 order by created_at desc limit 1', [current.id]);
     if (!run) reasons.push('no QA run for the current candidate');
     else {
-      const suite = await loadSuite(project.config, this.deps.suiteBaseDir).catch(() => null);
-      if (!suite || suite.revision !== run.suite_revision) reasons.push('suite or policy changed since the run; results are stale');
+      reasons.push(...(await this.staleness(project, q.environment, run)));
       if (run.state !== 'COMPLETED') reasons.push(`run ${run.id} is ${run.state}`);
       // Obligations recorded at aggregation are re-evaluated live below (an adjudication resolves them); everything else stands.
       else if (!run.gate?.eligible) reasons.push(...(run.gate?.reasons ?? ['gate held']).filter((r) => !r.startsWith(OBLIGATION_PREFIX)));
@@ -359,9 +401,9 @@ export class Orchestrator {
     const ttl = Math.min(Math.max(q.ttl_seconds ?? 900, 30), 86_400);
     await this.db.tx(async (c) => {
       await c.query(
-        `insert into promotion_decisions(id, tenant_id, project_id, environment, provider_deployment_id, commit_sha, run_id, run_attempt, suite_revision, generation, eligible, reasons, decided_by, expires_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now() + make_interval(secs => $14))`,
-        [id, project.tenant_id, project.id, q.environment, q.deployment_id, q.commit_sha, run?.id ?? null, run?.attempt ?? null, run?.suite_revision ?? null, run?.generation ?? null, g.eligible, JSON.stringify(g.reasons), p.actor, ttl],
+        `insert into promotion_decisions(id, tenant_id, project_id, environment, provider_deployment_id, commit_sha, run_id, run_attempt, suite_revision, generation, eligible, reasons, decided_by, expires_at, selection_digest)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now() + make_interval(secs => $14), $15)`,
+        [id, project.tenant_id, project.id, q.environment, q.deployment_id, q.commit_sha, run?.id ?? null, run?.attempt ?? null, run?.suite_revision ?? null, run?.generation ?? null, g.eligible, JSON.stringify(g.reasons), p.actor, ttl, run?.selection_digest ?? null],
       );
       await this.audit(c, p, 'promotion.decide', id, { eligible: g.eligible, reasons: g.reasons, run: run?.id ?? null });
     });
@@ -377,7 +419,7 @@ export class Orchestrator {
   async consumePromotion(p: Principal, decisionId: string) {
     requireRole(p, 'submitter');
     return this.db.tx(async (c) => {
-      const d = (await c.query<{ id: string; tenant_id: string; project_id: string; environment: string; provider_deployment_id: string; commit_sha: string; run_id: string | null; run_attempt: number | null; suite_revision: string | null; generation: string | null; eligible: boolean; expired: boolean; consumed_at: string | null }>(
+      const d = (await c.query<{ id: string; tenant_id: string; project_id: string; environment: string; provider_deployment_id: string; commit_sha: string; run_id: string | null; run_attempt: number | null; suite_revision: string | null; selection_digest: string | null; generation: string | null; eligible: boolean; expired: boolean; consumed_at: string | null }>(
         'select *, expires_at < now() as expired from promotion_decisions where id=$1 for update',
         [decisionId],
       )).rows[0];
@@ -389,11 +431,12 @@ export class Orchestrator {
       if (reasons.length === 0) {
         const g = await this.gateStatus(p, { project_id: d.project_id, environment: d.environment, deployment_id: d.provider_deployment_id, commit_sha: d.commit_sha });
         if (!g.eligible) reasons.push(...g.reasons);
-        const run = d.run_id ? (await c.query<{ attempt: number; suite_revision: string; generation: string }>('select attempt, suite_revision, generation::text from runs where id=$1', [d.run_id])).rows[0] : undefined;
+        const run = d.run_id ? (await c.query<{ attempt: number; suite_revision: string; generation: string; selection_digest: string | null }>('select attempt, suite_revision, generation::text, selection_digest from runs where id=$1', [d.run_id])).rows[0] : undefined;
         if (!run || g.run_id !== d.run_id) reasons.push('the gate now relies on a different run');
         else {
           if (run.attempt !== d.run_attempt) reasons.push(`run attempt changed (${d.run_attempt} → ${run.attempt})`);
-          if (run.suite_revision !== d.suite_revision) reasons.push('suite revision changed since the decision');
+          if (run.suite_revision !== d.suite_revision) reasons.push('execution contract changed since the decision');
+          if (run.selection_digest !== d.selection_digest) reasons.push('selection manifest changed since the decision');
         }
         const newest = (await c.query<{ g: string | null }>('select max(generation)::text g from runs where project_id=$1 and environment=$2', [d.project_id, d.environment])).rows[0]?.g ?? null;
         if (d.generation !== null && newest !== null && newest !== String(d.generation)) reasons.push(`a newer run generation exists (${d.generation} → ${newest})`);

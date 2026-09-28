@@ -28,6 +28,8 @@ export interface BaselineRecord {
 
 export interface BaselineStore {
   get(key: BaselineKey): Promise<{ record: BaselineRecord; png: Buffer } | null>;
+  /** One specific approved version (integrity-checked), whatever is current now. */
+  getVersion(key: BaselineKey, version: number): Promise<{ record: BaselineRecord; png: Buffer } | null>;
   /**
    * Approve `candidate` as the next version. `expected_version` is the baseline
    * version the reviewer compared against (0 when there was none); if another
@@ -58,6 +60,19 @@ export class FsBaselineStore implements BaselineStore {
       const record = JSON.parse(await readFile(join(b, 'current.json'), 'utf8')) as BaselineRecord;
       const png = await readFile(join(b, `v${record.version}.png`));
       if (sha256(png) !== record.sha256) throw new Error(`baseline ${b} failed its integrity check`);
+      return { record, png };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  async getVersion(key: BaselineKey, version: number) {
+    const b = this.base(key);
+    try {
+      const record = JSON.parse(await readFile(join(b, `v${version}.json`), 'utf8')) as BaselineRecord;
+      const png = await readFile(join(b, `v${version}.png`));
+      if (sha256(png) !== record.sha256) throw new Error(`baseline ${b} v${version} failed its integrity check`);
       return { record, png };
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -216,6 +231,15 @@ export class ArtifactBaselineStore implements BaselineStore {
     return { record, png };
   }
 
+  async getVersion(key: BaselineKey, version: number) {
+    const meta = await this.store.get(`${this.base(key)}/v${version}.json`);
+    if (!meta) return null;
+    const record = JSON.parse(meta.toString('utf8')) as BaselineRecord;
+    const png = await this.store.get(`${this.base(key)}/v${version}.png`);
+    if (!png || sha256(png) !== record.sha256) throw new Error(`baseline ${this.base(key)} v${version} failed its integrity check`);
+    return { record, png };
+  }
+
   async approve(key: BaselineKey, candidate: Buffer, a: { approved_by: string; commit_sha: string; deployment_id?: string | null; source: string; expected_sha256: string; expected_version: number }): Promise<BaselineRecord> {
     if (!a.approved_by.trim()) throw new Error('approval requires an approver');
     if (!/^[0-9a-f]{40}$/.test(a.commit_sha)) throw new Error('approval must be tied to a full commit SHA');
@@ -235,5 +259,51 @@ export class ArtifactBaselineStore implements BaselineStore {
   async list(): Promise<BaselineRecord[]> {
     const keys = (await this.store.list(this.prefix)).filter((k) => k.endsWith('/current.json'));
     return Promise.all(keys.map(async (k) => JSON.parse((await this.store.get(k))!.toString('utf8')) as BaselineRecord));
+  }
+}
+
+export interface FrozenBaselineRef {
+  scenario_id: string;
+  checkpoint: string;
+  execution_profile: string;
+  rendering_profile: string;
+  version: number;
+  sha256: string;
+}
+
+/**
+ * The baselines an execution was bound to at submission (re-audit R2).
+ * Comparison reads exactly the frozen version — never whatever became current
+ * later — and a checkpoint with no frozen baseline has none, even if one was
+ * approved meanwhile. Approvals go to the underlying store as usual.
+ */
+export class FrozenBaselineStore implements BaselineStore {
+  constructor(
+    private readonly inner: BaselineStore,
+    private readonly frozen: readonly FrozenBaselineRef[],
+  ) {}
+
+  private ref(k: BaselineKey) {
+    return this.frozen.find((f) => f.scenario_id === k.scenario_id && f.checkpoint === k.checkpoint && f.execution_profile === k.execution_profile && f.rendering_profile === k.rendering_profile);
+  }
+
+  async get(key: BaselineKey) {
+    const f = this.ref(key);
+    if (!f) return null;
+    const got = await this.inner.getVersion(key, f.version);
+    if (!got || got.record.sha256 !== f.sha256) throw new Error(`frozen baseline ${key.scenario_id}/${key.checkpoint} v${f.version} is missing or altered`);
+    return got;
+  }
+
+  getVersion(key: BaselineKey, version: number) {
+    return this.inner.getVersion(key, version);
+  }
+
+  approve(...a: Parameters<BaselineStore['approve']>) {
+    return this.inner.approve(...a);
+  }
+
+  list() {
+    return this.inner.list();
   }
 }

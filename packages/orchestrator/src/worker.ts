@@ -5,13 +5,14 @@ import { FixtureClient } from '@qa/oracles';
 import { recoverIntents, runSuite, type ExplorationOptions } from '@qa/worker';
 import { autonomyMode, type GateConfig } from '@qa/gate';
 import { describeObligation, outstandingObligations, PgIntentStore } from './intents.ts';
+import { FrozenBaselineStore } from '@qa/quality';
 import { basename } from 'node:path';
 import { uploadDir } from '@qa/evidence';
 import { FindingLedger } from '@qa/quality';
 import { checkReadiness, readRevision } from './readiness.ts';
 import { Sweeper } from './sweepers.ts';
 import { newId, type Orchestrator } from './service.ts';
-import { loadSuite, shard } from './suite.ts';
+import { contractChanges, loadSuite, selectionDigest, shard } from './suite.ts';
 import type { ProjectRow, RunRow } from './types.ts';
 
 export interface Job {
@@ -239,7 +240,11 @@ export class JobWorker {
     await this.db.query(`update runs set state='RUNNING', updated_at=now() where id=$1 and state='QUEUED'`, [run.id]);
     const cfg = project.config;
     const suite = await loadSuite(cfg, this.orch.deps.suiteBaseDir);
-    if (suite.revision !== run.suite_revision) throw new Error(`suite changed since selection (${run.suite_revision} → ${suite.revision})`);
+    // Execute only under the exact contract the run was selected under (including changes made while it is in progress).
+    const exec = await this.orch.resolveExecution(project, run.environment, suite);
+    if (exec.revision !== run.suite_revision) throw new Error(`execution contract changed since selection (${run.suite_revision} → ${exec.revision}: ${contractChanges(run.execution_snapshot, exec.contract).join('; ')})`);
+    if (run.selection_digest && selectionDigest(run.selection_manifest!) !== run.selection_digest) throw new Error('selection manifest does not match the identity frozen at submission');
+    const baselineStore = this.orch.deps.baselinesFor?.(project) ?? null;
     const env = this.o.env ?? process.env;
     const readOnly = cfg.environments[run.environment]?.read_only === true;
     const token = env[cfg.fixture_api.token_env];
@@ -300,7 +305,7 @@ export class JobWorker {
     try {
       if (runnable.length === 0) throw new NothingToRun();
       const { report, runDir } = await runSuite({
-        quality: { baselines: this.orch.deps.baselinesFor?.(project) ?? null, findings: ledger, commitSha: run.commit_sha, ...(this.orch.deps.visualReviewer ? { reviewer: this.orch.deps.visualReviewer } : {}) },
+        quality: { baselines: baselineStore ? new FrozenBaselineStore(baselineStore, exec.contract.baselines) : null, findings: ledger, commitSha: run.commit_sha, ...(this.orch.deps.visualReviewer ? { reviewer: this.orch.deps.visualReviewer } : {}) },
         scenarios: suite.scenarios.filter((s) => runnable.some((c) => c.scenario_id === s.id)),
         policy: suite.policy,
         baseUrl: url,
@@ -312,6 +317,7 @@ export class JobWorker {
         revision: () => readRevision(url, cfg.version_check),
         deploymentId: run.deployment_id,
         cases: runnable,
+        browserVersions: Object.fromEntries(Object.values(exec.contract.rendering.profiles).map((p) => [p.browser, p.browser_version])),
         retries: cfg.suite.retries,
         concurrency: cfg.suite.concurrency,
         signal: ac.signal,
@@ -406,6 +412,9 @@ export class JobWorker {
         required.map((r) => ({ scenario_id: r.scenario_id, execution_profile: r.execution_profile, verdict: r.verdict, critical: r.critical, required: true })),
       );
       for (const r of required.filter((x) => x.cleanup.status === 'failed')) gate.reasons.push(`${r.scenario_id}@${r.execution_profile}: cleanup failed`);
+      // A contract change after execution (while the run was in progress) makes these results stale too.
+      const project = await this.orch.projectById(run.project_id);
+      if (project) gate.reasons.push(...(await this.orch.staleness(project, run.environment, run)));
       // Fresh passing results never erase an uncertain effect left by an earlier fence or attempt.
       for (const x of await outstandingObligations(c, run.deployment_id, { includeLive: false })) gate.reasons.push(describeObligation(x));
       const eligible = gate.reasons.length === 0;

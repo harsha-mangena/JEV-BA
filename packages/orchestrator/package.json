@@ -18,6 +18,7 @@
     "@qa/s2": "*",
     "@qa/s1": "*",
     "@qa/gate": "*",
-    "@qa/calibration": "*"
+    "@qa/calibration": "*",
+    "@qa/browser": "*"
   }
 }

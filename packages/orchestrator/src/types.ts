@@ -32,6 +32,10 @@ export interface RunRow {
   state: string;
   attempt: number;
   selection_manifest: SelectionManifest | null;
+  /** The execution contract the run was selected under (see `resolveExecution`). */
+  execution_snapshot?: unknown;
+  /** Identity of the frozen selection manifest. */
+  selection_digest?: string | null;
   gate: { eligible: boolean; reasons: string[] } | null;
   reason: string | null;
   message: string | null;
