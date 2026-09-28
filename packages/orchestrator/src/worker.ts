@@ -462,6 +462,16 @@ export class JobWorker {
           if (same.length) await c.query('update outbox_events set published_at=now(), attempts=attempts+1 where id = any($1::bigint[])', [same]);
           for (const id of same) done.add(id);
           const run = (await c.query<RunRow>('select * from runs where id=$1', [ev.payload.run_id])).rows[0]!;
+          // A late publication for a candidate that is no longer current must not overwrite the status its lineage's
+          // current candidate owns for the same SHA and context (e.g. two deployments of one commit).
+          const owner = (await c.query<{ id: string; commit_sha: string }>(
+            'select d.id, d.commit_sha from deployment_channels ch join deployments d on d.id = ch.current_deployment_id where ch.project_id=$1 and ch.environment=$2 and ch.channel=$3',
+            [run.project_id, run.environment, run.channel ?? 'default'],
+          )).rows[0];
+          if (owner && owner.id !== run.deployment_id && owner.commit_sha === run.commit_sha) {
+            await c.query('update outbox_events set published_at=now(), attempts=attempts+1, last_error=$2 where id=$1', [ev.id, 'skipped: a newer candidate of this lineage owns the status for this commit']);
+            continue;
+          }
           const project = (await this.orch.projectById(run.project_id))!;
           const dep = (await c.query<{ provider: string; provider_deployment_id: string }>('select provider, provider_deployment_id from deployments where id=$1', [run.deployment_id])).rows[0];
           await this.orch.deps.publisherFor(project).publish({

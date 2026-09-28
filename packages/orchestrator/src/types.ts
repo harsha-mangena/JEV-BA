@@ -36,6 +36,9 @@ export interface RunRow {
   execution_snapshot?: unknown;
   /** Identity of the frozen selection manifest. */
   selection_digest?: string | null;
+  /** Lineage within the environment ('default' for single-lineage environments). */
+  channel?: string;
+  generation?: string | number | null;
   gate: { eligible: boolean; reasons: string[] } | null;
   reason: string | null;
   message: string | null;

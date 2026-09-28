@@ -19,7 +19,7 @@ const defaultResolver: Resolver = async (host) => (await lookup(host, { all: tru
  * environment and — unless the environment explicitly allows it on an
  * isolated runner — resolves exclusively to public addresses.
  */
-export async function checkCandidateUrl(raw: string, env: EnvironmentConfig, resolve: Resolver = defaultResolver): Promise<string[]> {
+export async function checkCandidateUrl(raw: string, env: Pick<EnvironmentConfig, 'url_patterns' | 'allow_private_network'>, resolve: Resolver = defaultResolver): Promise<string[]> {
   const problems: string[] = [];
   let url: URL;
   try {

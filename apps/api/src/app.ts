@@ -25,6 +25,10 @@ export const DeploymentEventBody = z
     commit_sha: z.string(),
     candidate_url: z.string().url().nullable().optional(),
     ci_run_id: z.union([z.string(), z.number()]).transform(String).optional(),
+    /** Lineage channel (e.g. `pr:123`); providers verify it against their own metadata. */
+    channel: z.string().regex(/^[\w.:/-]{1,100}$/).optional(),
+    /** Pipeline-supplied ordering (larger is newer), e.g. the CI run number. */
+    sequence: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -106,6 +110,8 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
         environment: body.environment,
         commit_sha: body.commit_sha,
         candidate_url: body.candidate_url ?? null,
+        ...(body.channel !== undefined ? { channel: body.channel } : {}),
+        ...(body.sequence !== undefined ? { sequence: body.sequence } : {}),
       },
       { provider: body.provider, delivery_id: deliveryId, payload_digest: digest(req.rawBody) },
     );

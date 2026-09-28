@@ -49,7 +49,7 @@ export function projectConfig(overrides: Record<string, unknown> = {}) {
 
 /** Minimal GitHub API double: deployments, deployment statuses, commit statuses, compare. */
 export class FakeGitHub {
-  deployments = new Map<string, { sha: string; environment: string; statuses: Array<{ id: number; state: string; environment_url: string }> }>();
+  deployments = new Map<string, { sha: string; environment: string; ref?: string; statuses: Array<{ id: number; state: string; environment_url: string }> }>();
   commitStatuses: Array<{ repo: string; sha: string; state: string; context: string; description: string; target_url?: string }> = [];
   compares = new Map<string, { status: string; files: Array<{ filename: string; status: string; previous_filename?: string }> }>();
   server!: Server;
@@ -70,7 +70,7 @@ export class FakeGitHub {
         if (m && req.method === 'GET') {
           const d = this.deployments.get(m[2]!);
           if (!d) return send(404, { message: 'Not Found' });
-          return m[3] ? send(200, d.statuses) : send(200, { id: Number(m[2]), sha: d.sha, environment: d.environment });
+          return m[3] ? send(200, d.statuses) : send(200, { id: Number(m[2]), sha: d.sha, environment: d.environment, ...(d.ref ? { ref: d.ref } : {}) });
         }
         m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/statuses\/([0-9a-f]{40})$/);
         if (m && req.method === 'POST') {
@@ -90,8 +90,8 @@ export class FakeGitHub {
     return this;
   }
 
-  deploy(id: number, sha: string, environment: string, url: string): void {
-    this.deployments.set(String(id), { sha, environment, statuses: [{ id: id * 10, state: 'success', environment_url: url }] });
+  deploy(id: number, sha: string, environment: string, url: string, ref?: string): void {
+    this.deployments.set(String(id), { sha, environment, ...(ref ? { ref } : {}), statuses: [{ id: id * 10, state: 'success', environment_url: url }] });
   }
 
   latest(sha: string) {
