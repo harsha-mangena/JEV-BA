@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "states": ["IMPLEMENTATION_PENDING", "IMPLEMENTED_OFFLINE_VERIFIED", "LIVE_VERIFICATION_REQUIRED", "QUALIFIED_FOR_PROFILE", "BLOCKED"],
+  "baseline": { "commit": "cb83f85b94be7080d577580d2038d44a9cbc9074", "evidence": "evidence/baseline/", "audit": "docs/evidence/audit-2026-09-27/" },
+  "items": [
+    { "id": "F01", "title": "Official TypeSafe request/response contract", "phase": 4, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F01a", "tests/audit/review.test.ts#F01b"], "lanes": ["audit", "unit"], "external_prerequisite": "TypeSafe API key and endpoint for the live probe", "scope": "S1 provider adapter" },
+    { "id": "F02", "title": "Effect-based permissions in both drivers", "phase": 1, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F02a", "tests/audit/review.test.ts#F02b"], "lanes": ["audit", "e2e"], "external_prerequisite": null, "scope": "fixture-shop application contract" },
+    { "id": "F03", "title": "Actual isolation for generated source", "phase": 3, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F03"], "lanes": ["audit", "isolation"], "external_prerequisite": null, "scope": "Linux runner with unprivileged user namespaces" },
+    { "id": "F04", "title": "Enforced autonomy modes, calibration and resolved-model identity", "phase": 5, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F04a", "tests/audit/review.test.ts#F04b", "tests/audit/review.test.ts#F04c"], "lanes": ["audit", "unit"], "external_prerequisite": null, "scope": "gate and exploration driver" },
+    { "id": "F05", "title": "Effective execution digest and current promotion checks", "phase": 7, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F05", "tests/audit/review.test.ts#F05b"], "lanes": ["audit", "service"], "external_prerequisite": null, "scope": "orchestrator gate" },
+    { "id": "F06", "title": "Artifact sanitization including archive contents", "phase": 3, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F06"], "lanes": ["audit", "e2e"], "external_prerequisite": null, "scope": "evidence publication" },
+    { "id": "F07", "title": "Concrete vision S2, screenshots and actual context fulfillment", "phase": 6, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F07"], "lanes": ["audit", "e2e"], "external_prerequisite": "Anthropic API key and a verified vision-capable model id for the live image probe", "scope": "S2 escalation" },
+    { "id": "F08", "title": "Combined cancellation and real deadlines", "phase": 4, "state": "IMPLEMENTATION_PENDING", "tests": ["tests/audit/review.test.ts#F08"], "lanes": ["audit", "unit"], "external_prerequisite": null, "scope": "provider transport and attempt deadlines" },
+    { "id": "F09", "title": "Durable pre-dispatch intents and effect reconciliation", "phase": 2, "state": "IMPLEMENTATION_PENDING", "tests": [], "lanes": ["service"], "external_prerequisite": null, "scope": "worker execution" },
+    { "id": "F10", "title": "Explicit action/frame/browser capabilities", "phase": 6, "state": "IMPLEMENTATION_PENDING", "tests": [], "lanes": ["e2e"], "external_prerequisite": "Firefox/WebKit binaries for those profiles", "scope": "observation and executors" },
+    { "id": "CONC", "title": "Atomic tenant admission and lease fencing", "phase": 2, "state": "IMPLEMENTATION_PENDING", "tests": [], "lanes": ["service"], "external_prerequisite": null, "scope": "job worker" }
+  ]
+}

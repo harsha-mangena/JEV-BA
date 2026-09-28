@@ -19,6 +19,7 @@ jobs:
           --health-cmd "pg_isready -U qa" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgres://qa@localhost:5432/qa
+      QA_REQUIRE_SERVICE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,7 +28,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run typecheck
-      - run: npm test
+      - name: Allow unprivileged user namespaces (generated-code sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm run lane -- static
+      - run: npm run lane -- unit
       - run: npm run qa -- validate
-      - run: npm run test:e2e
+      - run: npm run lane -- e2e
+      - run: npm run lane -- service
+      - run: npm run lane -- audit
+      - run: npm run lane -- isolation
+      - name: Upload lane manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lane-manifests
+          path: evidence/lanes/*.json

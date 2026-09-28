@@ -16,10 +16,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:all": "npm run typecheck && npm test && npm run test:e2e",
+    "test:all": "npm run typecheck && npm test && npm run test:e2e && npm run test:service && npm run test:audit && npm run test:isolation",
     "fixture-app": "tsx fixtures/test-app/src/main.ts",
     "qa": "tsx apps/cli/src/main.ts",
-    "test:live": "vitest run --config vitest.live.config.ts"
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:service": "QA_REQUIRE_SERVICE=1 vitest run --config vitest.service.config.ts",
+    "test:audit": "vitest run --config vitest.audit.config.ts",
+    "test:isolation": "vitest run --config vitest.isolation.config.ts",
+    "lane": "node scripts/run-lane.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

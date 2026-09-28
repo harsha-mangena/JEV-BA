@@ -16,6 +16,10 @@ import { buildApi, type ApiOptions } from '@qa/api';
 
 export const ROOT = join(import.meta.dirname, '../..');
 export const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL && process.env.QA_REQUIRE_SERVICE === '1') {
+  // A mandatory service lane must fail visibly, never skip, when its database is missing.
+  throw new Error('QA_REQUIRE_SERVICE=1 but DATABASE_URL is not set: the service lane cannot run');
+}
 export const FIXTURE_TOKEN = 'svc-fixture-token-0123456789';
 export const WEBHOOK_SECRET = 'webhook-secret-for-tests';
 
