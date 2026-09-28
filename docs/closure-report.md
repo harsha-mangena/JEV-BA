@@ -1,5 +1,13 @@
 # JEV-BA completion — closure report
 
+> **Superseded in part by the re-audit.** An independent re-audit of the merged
+> result (revision `c750de1`) found five residual issues (R1–R5), now fixed; see
+> [`reaudit-closure.md`](reaudit-closure.md). In particular, the crash-recovery
+> demo described in §6 promoted a run while a `notes.delete` intent was still
+> in `NEEDS_REVIEW`. That is R1: uncertain effects now hold the gate until they
+> are adjudicated. F05, F06 and F09 are extended by R2/R3, R4 and R1
+> respectively.
+
 Branch `claude/new-session-lnwzm0`. Lane evidence was produced on commit
 `3c3dd97` with a clean tree (`dirty: false` in every manifest); the unattended
 deployment flow ran on an image built from the same code. This report is
