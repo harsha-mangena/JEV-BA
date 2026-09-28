@@ -3,3 +3,5 @@ export * from './log.ts';
 export * from './junit.ts';
 export * from './html.ts';
 export * from './store.ts';
+export * from './zip.ts';
+export * from './sanitize.ts';

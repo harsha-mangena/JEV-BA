@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { lintGeneratedSpec } from './playwright.ts';
+import { runSandboxed, sandboxAvailable } from './sandbox.ts';
 
 export interface SpecValidation {
   status: 'passed' | 'failed' | 'rejected' | 'error';
@@ -10,51 +10,53 @@ export interface SpecValidation {
   lint: string[];
 }
 
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
 /**
- * Run a generated spec in a restricted child process: a fresh working
- * directory, a minimal environment (no inherited credentials), one worker,
- * no retries and a hard timeout. `workDir` must be inside a directory whose
- * node_modules provides @playwright/test.
+ * Run a generated spec inside the namespace sandbox: its own work directory
+ * is the only writable host path, the application under test is the only
+ * reachable network endpoint, nothing from the host environment is inherited,
+ * and a hard timeout kills the process tree. There is no host fallback: if
+ * the sandbox cannot be created the result is `error`, never `passed`.
  */
 export async function validateGeneratedSpec(source: string, o: { workDir: string; baseUrl: string; fixtureToken: string; timeoutMs?: number }): Promise<SpecValidation> {
   const lint = lintGeneratedSpec(source);
   if (lint.length) return { status: 'rejected', detail: lint.join('; '), lint };
+  const sandbox = await sandboxAvailable();
+  if (!sandbox.ok) return { status: 'error', detail: `sandbox unavailable; generated code is never run on the host: ${sandbox.detail}`, lint };
+
+  const target = new URL(o.baseUrl);
+  const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+  // Inside the sandbox the application is reachable only through the relay on loopback.
+  const insideBase = LOOPBACK.has(target.hostname) ? o.baseUrl : `${target.protocol}//127.0.0.1:${port}${target.pathname}`;
+
   await rm(o.workDir, { recursive: true, force: true });
   await mkdir(o.workDir, { recursive: true });
   await writeFile(join(o.workDir, 'generated.spec.ts'), source);
-  const exe = process.env.QA_CHROMIUM_EXECUTABLE;
   await writeFile(
     join(o.workDir, 'playwright.config.mjs'),
-    `export default { testDir: '.', workers: 1, retries: 0, timeout: 60000, reporter: [['json', { outputFile: 'results.json' }]], use: { headless: true${exe ? `, launchOptions: { executablePath: ${JSON.stringify(exe)} }` : ''} } };\n`,
+    `export default { testDir: '.', outputDir: './test-results', workers: 1, retries: 0, timeout: 60000, reporter: [['json', { outputFile: 'results.json' }]], use: { headless: true } };\n`,
   );
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
-    HOME: o.workDir,
-    QA_BASE_URL: o.baseUrl,
-    QA_FIXTURE_TOKEN: o.fixtureToken,
-    // HOME is isolated, so point Playwright at the real browser cache explicitly.
-    PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? defaultBrowsersPath(),
-  };
-  const cli = join(process.cwd(), 'node_modules', '@playwright', 'test', 'cli.js');
-  const code = await new Promise<number | null>((resolve) => {
-    const child = spawn(process.execPath, [cli, 'test', '--config', join(o.workDir, 'playwright.config.mjs')], { cwd: o.workDir, env, stdio: 'ignore' });
-    const timer = setTimeout(() => child.kill('SIGKILL'), o.timeoutMs ?? 120_000);
-    child.on('exit', (c) => {
-      clearTimeout(timer);
-      resolve(c);
-    });
+  const require = createRequire(import.meta.url);
+  const pwTest = dirname(require.resolve('@playwright/test/package.json'));
+  const nodeModules = dirname(dirname(pwTest));
+  const browsers = process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(process.env.HOME ?? '/root', '.cache', 'ms-playwright');
+  const r = await runSandboxed({
+    command: [process.execPath, '/sandbox/node_modules/@playwright/test/cli.js', 'test', '--config', '/sandbox/work/playwright.config.mjs'],
+    workDir: o.workDir,
+    nodeModules,
+    readOnly: [browsers],
+    env: { QA_BASE_URL: insideBase, QA_FIXTURE_TOKEN: o.fixtureToken, PLAYWRIGHT_BROWSERS_PATH: browsers },
+    allowTcp: { host: LOOPBACK.has(target.hostname) ? '127.0.0.1' : target.hostname, port },
+    timeoutMs: o.timeoutMs ?? 120_000,
   });
+  if (r.status === 'unavailable') return { status: 'error', detail: `sandbox could not start: ${r.stderr.slice(0, 300)}`, lint };
+  if (r.status === 'timeout') return { status: 'error', detail: `timed out after ${o.timeoutMs ?? 120_000} ms; process tree killed`, lint };
   try {
-    const r = JSON.parse(await readFile(join(o.workDir, 'results.json'), 'utf8')) as { stats: { expected: number; unexpected: number; skipped: number; flaky: number } };
-    if (r.stats.skipped > 0 || r.stats.flaky > 0) return { status: 'failed', detail: `skipped=${r.stats.skipped} flaky=${r.stats.flaky}`, lint };
-    return r.stats.unexpected === 0 && r.stats.expected > 0 ? { status: 'passed', detail: `${r.stats.expected} test(s) passed`, lint } : { status: 'failed', detail: `${r.stats.unexpected} unexpected failure(s) (exit ${code})`, lint };
+    const res = JSON.parse(await readFile(join(o.workDir, 'results.json'), 'utf8')) as { stats: { expected: number; unexpected: number; skipped: number; flaky: number } };
+    if (res.stats.skipped > 0 || res.stats.flaky > 0) return { status: 'failed', detail: `skipped=${res.stats.skipped} flaky=${res.stats.flaky}`, lint };
+    return res.stats.unexpected === 0 && res.stats.expected > 0 ? { status: 'passed', detail: `${res.stats.expected} test(s) passed`, lint } : { status: 'failed', detail: `${res.stats.unexpected} unexpected failure(s) (exit ${r.code})`, lint };
   } catch {
-    return { status: 'error', detail: `no results produced (exit ${code})`, lint };
+    return { status: 'error', detail: `no results produced (exit ${r.code}): ${r.stderr.slice(-300)}`, lint };
   }
-}
-
-function defaultBrowsersPath(): string {
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Caches', 'ms-playwright');
-  if (process.platform === 'win32') return join(process.env.LOCALAPPDATA ?? homedir(), 'ms-playwright');
-  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'ms-playwright');
 }

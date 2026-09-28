@@ -1,4 +1,5 @@
 import type { Assertion, Locator, Scenario, Step } from '@qa/contracts';
+import { astLintGeneratedSpec } from './lint.ts';
 
 const q = (s: string) => JSON.stringify(s);
 
@@ -121,5 +122,5 @@ export function lintGeneratedSpec(source: string): string[] {
     [/child_process|node:fs|process\.exit|eval\(|new Function/, 'filesystem, process or dynamic code access is not allowed'],
     [/expect\.soft/, 'soft assertions would weaken the contract'],
   ];
-  return rules.filter(([re]) => re.test(source)).map(([, why]) => why);
+  return [...rules.filter(([re]) => re.test(source)).map(([, why]) => why), ...astLintGeneratedSpec(source)];
 }

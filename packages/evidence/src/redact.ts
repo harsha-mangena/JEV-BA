@@ -14,6 +14,11 @@ export class Redactor {
     if (value && value.length >= 4) this.secrets.add(value);
   }
 
+  /** Registered secret values (for byte-level redaction and canary scans; never log these). */
+  values(): string[] {
+    return [...this.secrets];
+  }
+
   string(s: string): string {
     let out = s;
     for (const secret of this.secrets) out = out.split(secret).join(REDACTED);

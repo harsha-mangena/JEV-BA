@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@qa/contracts": "*",
+    "typescript": "^5.7.0",
     "yaml": "^2.6.0"
   }
 }

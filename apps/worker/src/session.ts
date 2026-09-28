@@ -326,7 +326,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
           const refs: string[] = [];
           for (const att of attachments ?? []) {
             const ref = await log.writeArtifact(att.kind, `${m.id}/${att.name}`, att.bytes);
-            refs.push(`${ref.path}#sha256=${ref.sha256}`);
+            if (ref) refs.push(`${ref.path}#sha256=${ref.sha256}`);
           }
           const result: AssertionResult = { milestone_id: m.id, index: ai, elapsed_ms: Date.now() - t0, ...plain, ...(refs.length ? { message: [plain.message, ...refs.map((x) => `artifact: ${x}`)].filter(Boolean).join('\n') } : {}) };
           assertions.push(result);
@@ -341,7 +341,7 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
         return failed;
       },
       async screenshot(name) {
-        const shot = await p.screenshot({ fullPage: true }).catch(() => null);
+        const shot = await p.screenshot({ fullPage: true, mask: [p.locator('input[type=password]')] }).catch(() => null);
         if (shot) await log.writeArtifact('screenshot', `${String(shotCount++).padStart(2, '0')}-${name}.png`, shot);
       },
     };
@@ -386,14 +386,14 @@ export async function runAttempt(o: AttemptOptions, drive: Driver): Promise<Case
       });
     }
     if (page && verdict !== 'PASS') {
-      const shot = await page.screenshot({ fullPage: true }).catch(() => null);
+      const shot = await page.screenshot({ fullPage: true, mask: [page.locator('input[type=password]')] }).catch(() => null);
       if (shot) await log.writeArtifact('screenshot', 'failure.png', shot).catch(() => undefined);
     }
     if (context && tracing) {
       const tracePath = join(caseDir, 'trace.zip');
       await context.tracing
         .stop({ path: tracePath })
-        .then(async () => log.registerArtifact('trace', tracePath, await readFile(tracePath)))
+        .then(async () => log.registerSanitizedArchive('trace', tracePath))
         .catch((e: Error) => log.record('artifact', `trace capture failed: ${e.message}`));
     }
     await context?.close().catch(() => undefined);

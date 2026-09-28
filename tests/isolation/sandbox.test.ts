@@ -1,0 +1,174 @@
+import { spawnSync } from 'node:child_process';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runSandboxed, sandboxAvailable, validateGeneratedSpec } from '@qa/compiler';
+
+/**
+ * Isolation lane (audit F03). Hostile programs run directly in the sandbox —
+ * bypassing the lint on purpose — and every escape route is checked from the
+ * host side. This lane is mandatory: an unavailable sandbox fails it.
+ */
+
+const ROOT = join(import.meta.dirname, '../..');
+const BASE = join(ROOT, '.qa-work', 'isolation');
+let app: Server;
+let other: Server;
+let appPort = 0;
+let otherPort = 0;
+let otherHits = 0;
+
+const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
+
+beforeAll(async () => {
+  await mkdir(BASE, { recursive: true });
+  app = createServer((_q, s) => s.end('app-ok'));
+  other = createServer((_q, s) => {
+    otherHits++;
+    s.end('other-service');
+  });
+  appPort = await listen(app);
+  otherPort = await listen(other);
+});
+afterAll(async () => {
+  app?.close();
+  other?.close();
+});
+
+async function hostile(name: string, script: string, extra: Partial<Parameters<typeof runSandboxed>[0]> = {}) {
+  const workDir = join(BASE, name);
+  await rm(workDir, { recursive: true, force: true });
+  const r = await runSandboxed({ command: [process.execPath, '-e', script], workDir, allowTcp: { host: '127.0.0.1', port: appPort }, timeoutMs: 30_000, ...extra });
+  return { ...r, workDir };
+}
+
+describe('namespace sandbox', () => {
+  it('is available on this runner (the lane fails instead of skipping when it is not)', async () => {
+    const s = await sandboxAvailable();
+    expect(s.ok, s.detail).toBe(true);
+  });
+
+  it('confines the filesystem: only the work directory is writable and host files are invisible', async () => {
+    const outside = join(BASE, 'outside-marker.txt');
+    const canary = join(BASE, 'host-secret.txt');
+    await rm(outside, { force: true });
+    await writeFile(canary, 'HOST-CANARY-7f3a');
+    const r = await hostile(
+      'fs',
+      `const fs = require('fs'); const out = {};
+       const t = (k, f) => { try { out[k] = f(); } catch (e) { out[k] = e.code; } };
+       t('write_outside', () => (fs.writeFileSync(${JSON.stringify(outside)}, 'x'), 'WROTE'));
+       t('read_canary', () => fs.readFileSync(${JSON.stringify(canary)}, 'utf8'));
+       t('read_repo', () => fs.readdirSync(${JSON.stringify(ROOT)}).length);
+       t('read_root_home', () => fs.readdirSync('/root').length);
+       t('write_usr', () => (fs.writeFileSync('/usr/qa-x', 'x'), 'WROTE'));
+       t('write_etc', () => (fs.writeFileSync('/etc/qa-x', 'x'), 'WROTE'));
+       t('write_work', () => (fs.writeFileSync('/sandbox/work/inside.txt', 'ok'), 'ok'));
+       t('shadow', () => fs.readFileSync('/etc/shadow', 'utf8').length);
+       console.log(JSON.stringify(out));`,
+    );
+    expect(r.status, r.stderr).toBe('exited');
+    const out = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(out).toMatchObject({ write_outside: 'ENOENT', read_canary: 'ENOENT', read_repo: 'ENOENT', read_root_home: 'ENOENT', write_usr: 'EROFS', write_etc: 'EROFS', write_work: 'ok' });
+    expect(out.shadow).not.toEqual(expect.any(Number));
+    await expect(readFile(outside)).rejects.toThrow();
+    expect(await readFile(join(r.workDir, 'inside.txt'), 'utf8')).toBe('ok');
+  });
+
+  it('confines the network: the application is reachable, other host services and external addresses are not', async () => {
+    otherHits = 0;
+    const r = await hostile(
+      'net',
+      `const net = require('net');
+       const conn = (h, p) => new Promise((res) => { const s = net.connect({ host: h, port: p }); s.setTimeout(2000); s.on('connect', () => { s.destroy(); res('CONNECTED'); }); s.on('error', (e) => res(e.code)); s.on('timeout', () => { s.destroy(); res('TIMEOUT'); }); });
+       (async () => {
+         const app = await fetch('http://127.0.0.1:${appPort}/').then((r) => r.text(), (e) => String(e.cause?.code ?? e));
+         console.log(JSON.stringify({ app, other: await conn('127.0.0.1', ${otherPort}), postgres: await conn('127.0.0.1', 5432), external: await conn('1.1.1.1', 443), dns: await require('dns').promises.lookup('example.com').then(() => 'RESOLVED', (e) => e.code) }));
+       })();`,
+    );
+    expect(r.status, r.stderr).toBe('exited');
+    const out = JSON.parse(r.stdout) as Record<string, string>;
+    expect(out.app).toBe('app-ok');
+    expect(out.other).not.toBe('CONNECTED');
+    expect(out.postgres).not.toBe('CONNECTED');
+    expect(out.external).not.toBe('CONNECTED');
+    expect(out.dns).not.toBe('RESOLVED');
+    expect(otherHits).toBe(0);
+  });
+
+  it('inherits no host environment and runs with no capabilities, no_new_privs and a private PID space', async () => {
+    process.env.QA_HOST_CANARY = 'env-canary-91b2';
+    try {
+      const r = await hostile(
+        'priv',
+        `const fs = require('fs');
+         const st = Object.fromEntries(fs.readFileSync('/proc/self/status', 'utf8').split('\\n').filter((l) => /^(CapEff|CapPrm|CapBnd|NoNewPrivs):/.test(l)).map((l) => l.split(/:\\s+/)));
+         const pids = fs.readdirSync('/proc').filter((d) => /^\\d+$/.test(d)).length;
+         console.log(JSON.stringify({ env: Object.keys(process.env).sort(), st, pids }));`,
+        { env: { ALLOWED: '1' } },
+      );
+      expect(r.status, r.stderr).toBe('exited');
+      const out = JSON.parse(r.stdout) as { env: string[]; st: Record<string, string>; pids: number };
+      expect(out.env).not.toContain('QA_HOST_CANARY');
+      expect(out.env).toContain('ALLOWED');
+      expect(out.env.filter((k) => k.startsWith('SBX_'))).toEqual([]);
+      expect(out.st).toMatchObject({ CapEff: '0000000000000000', CapPrm: '0000000000000000', CapBnd: '0000000000000000', NoNewPrivs: '1' });
+      expect(out.pids).toBeLessThan(10);
+    } finally {
+      delete process.env.QA_HOST_CANARY;
+    }
+  });
+
+  it('kills the whole process tree on timeout, including detached descendants', async () => {
+    const marker = `qa-sbx-orphan-${Date.now()}`;
+    const r = await hostile('timeout', `require('child_process').spawn('/bin/sh', ['-c', 'exec -a ${marker} sleep 600'], { detached: true, stdio: 'ignore' }).unref(); setInterval(() => {}, 1000);`, { timeoutMs: 2_000 });
+    expect(r.status).toBe('timeout');
+    await new Promise((res) => setTimeout(res, 300));
+    expect(spawnSync('pgrep', ['-f', marker]).status).toBe(1);
+  });
+
+  it('bounds process creation', async () => {
+    const r = await hostile(
+      'nproc',
+      `const cp = require('child_process'); let ok = 0, failed = 0;
+       for (let i = 0; i < 200; i++) { try { cp.spawn('/bin/sleep', ['30'], { stdio: 'ignore' }).on('error', () => failed++); ok++; } catch { failed++; } }
+       setTimeout(() => { console.log(JSON.stringify({ ok, failed })); process.exit(0); }, 1500);`,
+      { limits: { nproc: 64 } },
+    );
+    expect(r.status, r.stderr).toBe('exited');
+    const out = JSON.parse(r.stdout) as { ok: number; failed: number };
+    expect(out.failed).toBeGreaterThan(0);
+  });
+});
+
+describe('generated-spec validation runs only inside the sandbox', () => {
+  it('a lint-clean spec cannot reach any service but the application under test', async () => {
+    otherHits = 0;
+    const source = `import { expect, test } from '@playwright/test';
+test('probe another loopback service', async () => {
+  const r = await fetch('http://127.0.0.1:${otherPort}/').then(() => 'reached', () => 'blocked');
+  expect(r).toBe('reached');
+});
+`;
+    const v = await validateGeneratedSpec(source, { workDir: join(BASE, 'spec-net'), baseUrl: `http://127.0.0.1:${appPort}`, fixtureToken: 'isolation-token-0000', timeoutMs: 60_000 });
+    expect(v.lint).toEqual([]);
+    expect(v.status).toBe('failed');
+    expect(otherHits).toBe(0);
+  });
+
+  it('lint rejects the audit F03 spec and equivalent spellings before anything runs', async () => {
+    const outside = join(BASE, 'f03-marker.txt');
+    for (const src of [
+      `import { writeFileSync } from 'fs';\nimport { test } from '@playwright/test';\ntest('x', () => { writeFileSync(${JSON.stringify(outside)}, 'x'); });`,
+      `import { test } from '@playwright/test';\ntest('x', () => { require('fs').writeFileSync(${JSON.stringify(outside)}, 'x'); });`,
+      `import { test } from '@playwright/test';\ntest('x', async () => { (await import('node:fs')).writeFileSync(${JSON.stringify(outside)}, 'x'); });`,
+      `import { test } from '@playwright/test';\ntest('x', () => { (globalThis as any)['proc' + 'ess'].exit(0); });`,
+    ]) {
+      const v = await validateGeneratedSpec(src, { workDir: join(BASE, 'spec-lint'), baseUrl: `http://127.0.0.1:${appPort}`, fixtureToken: 'isolation-token-0000', timeoutMs: 30_000 });
+      expect(v.status, src).toBe('rejected');
+    }
+    await expect(readFile(outside)).rejects.toThrow();
+  });
+});
