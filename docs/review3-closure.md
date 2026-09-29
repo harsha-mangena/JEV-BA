@@ -190,5 +190,30 @@ were rebuilt from the report's description. Their assertions are no weaker than 
 
 ## 4. Lanes on the final commit
 
-See §4 of this document's companion evidence, `docs/evidence/review3-lanes/`. The results are
-filled in below when the lanes are run on a clean tree.
+These lanes ran on commit `b755a41` with a clean tree. The manifests are in
+`docs/evidence/review3-lanes/`: every manifest records `dirty: false`, and each one lists its
+failures, its skips (none) and any missing prerequisite. GitHub CI ran the same lanes on the same
+commit, with a delegated cgroup v2, and they passed there too.
+
+| Lane | Command | Result |
+|---|---|---|
+| static | `npm run lane -- static` | PASSED |
+| unit | `npm run lane -- unit` | 189/189, 0 failed, 0 skipped |
+| e2e | `npm run lane -- e2e` | 88/88, 0 failed, 0 skipped |
+| service | `QA_REQUIRE_SERVICE=1 DATABASE_URL=… npm run lane -- service` | 49/49, 0 failed, 0 skipped (PostgreSQL 16) |
+| audit | `npm run lane -- audit` | 26/26: 13 original probes, 7 re-audit probes and 6 third-review probes |
+| isolation | `npm run lane -- isolation` | 12/12, including 4 memory-limit tests (cgroup v1 locally, v2 in CI) |
+| live | `npm run lane -- live` | **BLOCKED**: missing `QA_S1_API_KEY`. It was not run and is not counted as passing. |
+| live_s2 | `npm run lane -- live_s2` | **BLOCKED**: missing `ANTHROPIC_API_KEY`. It was not run and is not counted as passing. |
+| spec validation | `npm run qa -- validate` | all scenarios ok |
+| deployment flow | `docker build -t jev-ba/qa:local . && node deploy/demo/run-demo.mjs --out docs/evidence/review3-demo` | PASSED |
+
+The deployment flow ran against the fixture, and passed all three steps:
+
+1. The clean deployment was promoted once.
+2. The defective deployment was held and its promotion refused.
+3. The run whose worker was SIGKILLed held its gate on an unverifiable effect of the dead worker
+   (`notes.create`, `NEEDS_REVIEW`). After an admin adjudicated it and the run was retried, the
+   deployment promoted.
+
+This is fixture proof only. It does not establish an installed, real-world deployment gate.
