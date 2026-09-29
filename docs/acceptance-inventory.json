@@ -409,8 +409,8 @@
     "reviewed_revision": "c750de1f67b9f4c78eec9a0c5f2214bb422c820a",
     "probes": "tests/audit/reaudit.test.ts",
     "evidence": [
-      "docs/evidence/reaudit/probes-at-c750de1.log",
-      "docs/evidence/reaudit/probes-after-fix.log"
+      "docs/evidence/reaudit/probes-at-c750de1.txt",
+      "docs/evidence/reaudit/probes-after-fix.txt"
     ],
     "report": "docs/reaudit-closure.md"
   }

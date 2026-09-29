@@ -1,0 +1,32 @@
+ RUN  v3.2.7 <worktree at c750de1>
+REAUDIT R1a {"lookups":0,"state_after_recovery":"ACKNOWLEDGED"}
+REAUDIT R1b {"first":["NEEDS_REVIEW"],"second":[]}
+REAUDIT R1c {"eligible":true,"run_id":"run_1","reasons":[]}
+REAUDIT R2a {"a":"suite_27736253629c136a","b":"suite_27736253629c136a"}
+REAUDIT R2b {"eligible":true,"run_id":"run_1","reasons":[]}
+REAUDIT R4 {"residual_hits":0,"image_retained":true,"image_unchanged":true}
+REAUDIT R5 {"qualified_at":"1996-01-10T00:00:00.000Z","found_now":true}
+   × R1a: a mutation acknowledged but never confirmed before a crash is reconciled against the application on recovery 6ms
+     → recovery must look the acknowledged mutation up: expected 0 to be greater than 0
+   × R1b: a review obligation stays visible to later recovery passes 5ms
+     → the second pass must still surface the unresolved review: expected [] to deeply equal [ [ 'a1.i1', 'NEEDS_REVIEW' ] ]
+   × R1c: an unresolved review obligation holds the release gate even when the run itself passed 110ms
+     → expected true to be false // Object.is equality
+   × R2a: a different oracle backend is a different execution identity 70ms
+     → expected 'suite_27736253629c136a' not to be 'suite_27736253629c136a' // Object.is equality
+   × R2b: a passing run stops qualifying when only the oracle backend changes 53ms
+     → expected true to be false // Object.is equality
+   × R4: a secret painted into an image resource does not survive trace sanitization 134ms
+     → an image whose pixels may show a secret must not be published as sanitized: expected { name: 'resources/shot.png', …(1) } to be undefined
+   × R5: a qualification is not returned after its compatibility evidence has expired 9ms
+     → a 1996 qualification with a 30-day window must not authorize calibrated dispatch now: expected { id: 'qual_cal_1_shop_staging', …(8) } to be null
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+AssertionError: recovery must look the acknowledged mutation up: expected 0 to be greater than 0
+AssertionError: the second pass must still surface the unresolved review: expected [] to deeply equal [ [ 'a1.i1', 'NEEDS_REVIEW' ] ]
+AssertionError: expected true to be false // Object.is equality
+AssertionError: expected 'suite_27736253629c136a' not to be 'suite_27736253629c136a' // Object.is equality
+AssertionError: expected true to be false // Object.is equality
+AssertionError: an image whose pixels may show a secret must not be published as sanitized: expected { name: 'resources/shot.png', …(1) } to be undefined
+AssertionError: a 1996 qualification with a 30-day window must not authorize calibrated dispatch now: expected { id: 'qual_cal_1_shop_staging', …(8) } to be null
+ Test Files  1 failed (1)
+      Tests  7 failed (7)
