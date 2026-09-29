@@ -30,6 +30,17 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Allow unprivileged user namespaces (generated-code sandbox)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Delegate a cgroup for the sandbox memory limit
+        # cgroup v2: a parent owned by the runner with the memory and pids controllers enabled for its children.
+        # Moving a sandbox into its cgroup writes the root cgroup.procs, which the runner does through sudo tee.
+        run: |
+          set -eux
+          cat /sys/fs/cgroup/cgroup.subtree_control
+          sudo mkdir -p /sys/fs/cgroup/qa-sandbox
+          echo "+memory +pids" | sudo tee /sys/fs/cgroup/qa-sandbox/cgroup.subtree_control
+          sudo chown -R "$(id -u):$(id -g)" /sys/fs/cgroup/qa-sandbox
+          echo "QA_SANDBOX_CGROUP=/sys/fs/cgroup/qa-sandbox" >> "$GITHUB_ENV"
+          echo "QA_SANDBOX_CGROUP_SUDO=1" >> "$GITHUB_ENV"
       - run: npm run lane -- static
       - run: npm run lane -- unit
       - run: npm run qa -- validate
