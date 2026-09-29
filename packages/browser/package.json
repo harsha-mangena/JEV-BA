@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@qa/contracts": "*",
-    "@playwright/test": "1.56.1"
+    "@playwright/test": "1.56.1",
+    "pngjs": "^7.0.0"
   }
 }

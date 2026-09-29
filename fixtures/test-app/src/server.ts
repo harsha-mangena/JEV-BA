@@ -23,8 +23,11 @@ export interface FixtureControl {
   effectsDelayMs: number;
   /** Before deleting a note (holds an unkeyed deletion in flight). */
   noteDeleteDelayMs: number;
-  /** Show the signed-in user's password in a fixed corner banner (a secret rendered into pixels, for privacy tests). */
-  credentialEcho: boolean;
+  /**
+   * Show the signed-in user's password in a fixed bottom-right banner (a secret rendered into pixels, for privacy
+   * tests): as text (`true`), as CSS generated content (`'generated'`), or overflowing a 40px box (`'overflow'`).
+   */
+  credentialEcho: boolean | 'generated' | 'overflow';
 }
 
 export interface FixtureApp {
@@ -110,10 +113,14 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
       has('focus_outline_removed') ? '*:focus,*:focus-visible{outline:none!important;box-shadow:none!important}' : '',
       has('header_restyled') ? 'header{background:#6b2fb3!important}' : '',
     ].join('');
-  const echo = (user: User | null) =>
-    user && control.credentialEcho
-      ? `<div data-testid="credential-echo" style="position:fixed;right:0;bottom:0;width:360px;height:48px;box-sizing:border-box;padding:12px;background:#fffbe6;color:#000;font:16px sans-serif;z-index:5;pointer-events:none">Recovery code: ${v.esc(user.password)}</div>`
-      : '';
+  const echo = (user: User | null) => {
+    if (!user || !control.credentialEcho) return '';
+    const box = 'position:fixed;right:0;bottom:0;width:360px;height:48px;box-sizing:border-box;padding:12px;background:#fffbe6;color:#000;font:16px sans-serif;z-index:5;pointer-events:none';
+    if (control.credentialEcho === 'generated') return `<style>[data-testid=credential-echo]::before{content:"Recovery code: " attr(data-code)}</style><div data-testid="credential-echo" data-code="${v.esc(user.password)}" style="${box}"></div>`;
+    // A narrow box whose text overflows to the left (right-to-left run inside a right-anchored box).
+    if (control.credentialEcho === 'overflow') return `<div data-testid="credential-echo" dir="rtl" style="${box.replace('width:360px', 'width:40px').replace('padding:12px', 'padding:12px 0')};white-space:nowrap;overflow:visible">Recovery code: ${v.esc(user.password)}</div>`;
+    return `<div data-testid="credential-echo" style="${box}">Recovery code: ${v.esc(user.password)}</div>`;
+  };
   const page = (res: ServerResponse, status: number, title: string, user: User | null, body: string, script?: string, extraBody?: string) =>
     send(res, status, v.layout({ title, user, revision, body, extraCss: defectCss(), ...(script ? { script } : {}), extraBody: `${extraBody ?? ''}${echo(user)}` }));
 
