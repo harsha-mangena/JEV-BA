@@ -9,7 +9,7 @@ import type { FixtureClient } from '@qa/oracles';
 import { runCaseAttempt } from './case.ts';
 import type { ExplorationOptions } from './exploration.ts';
 import type { AttemptHooks, QualityOptions } from './session.ts';
-import type { IntentStore } from './intents.ts';
+import { MemoryIntentStore, type IntentRecord, type IntentStore } from './intents.ts';
 
 export interface SuiteOptions {
   scenarios: Scenario[];
@@ -95,6 +95,8 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
   const runId = o.runId ?? `run_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}_${randomBytes(3).toString('hex')}`;
   const runDir = join(o.outDir, runId);
   await mkdir(runDir, { recursive: true });
+  /** One store for the whole logical execution, so every attempt sees what earlier attempts left uncertain. */
+  const intents = o.intents ?? new MemoryIntentStore();
   const startedAt = new Date().toISOString();
 
   const planned: PlannedCase[] = o.scenarios
@@ -145,10 +147,21 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
             o.onCase?.(stub);
             continue;
           }
+          let held: IntentRecord[] = [];
           for (let n = 1; n <= 1 + (o.retries ?? 0); n++) {
-            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.readOnly ? { readOnly: true } : {}), ...(o.intents ? { intents: o.intents } : {}), ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
+            // An effect this case may already have caused is unaccounted for: dispatching again (on any fixture)
+            // could duplicate it. Nothing runs until the obligation is reconciled or adjudicated.
+            held = await intents.openFor(next.scenario.id, next.profile);
+            if (held.length) break;
+            const r = await runCaseAttempt({ browser, scenario: next.scenario, profile: next.profile, baseUrl: o.baseUrl, environment: o.environment, policy: o.policy, fixtures: o.fixtures, runDir, attemptNumber: n, ...(o.signedOutPath ? { signedOutPath: o.signedOutPath } : {}), ...(o.signal ? { signal: o.signal } : {}), ...(o.exploration ? { exploration: o.exploration } : {}), ...(o.hooks ? { hooks: o.hooks } : {}), ...(o.readOnly ? { readOnly: true } : {}), intents, ...(o.quality ? { quality: { ...o.quality, commitSha: o.quality.commitSha ?? o.commitSha ?? null } } : {}) });
             attempts.push(r);
             if (r.verdict === 'PASS' || r.verdict === 'BLOCKED' || r.verdict === 'CANCELLED') break;
+          }
+          if (attempts.length === 0) {
+            const stub = stubCase(next, 'NEEDS_REVIEW', 'effect_unreconciled', `not run: ${describeHeld(held)}`);
+            cases.push(stub);
+            o.onCase?.(stub);
+            continue;
           }
           const last = attempts[attempts.length - 1]!;
           const combined: CaseResult = {
@@ -156,6 +169,9 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
             verdict: combineAttempts(attempts.map((a) => a.verdict)),
             prior_attempts: attempts.slice(0, -1).map((a) => ({ attempt_id: a.attempt_id, verdict: a.verdict, reason: a.reason, message: a.message })),
           };
+          if (held.length && attempts.length < 1 + (o.retries ?? 0)) {
+            combined.message = `${combined.message ?? combined.verdict}; not retried: ${describeHeld(held)}`;
+          }
           if (combined.verdict === 'FLAKY' && combined.reason === null) {
             const first = attempts.find((a) => a.verdict !== 'PASS')!;
             combined.reason = first.reason;
@@ -187,6 +203,11 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
       .filter((c) => !exploratory.has(c.scenario_id))
       .map((c) => ({ scenario_id: c.scenario_id, execution_profile: c.execution_profile, verdict: c.verdict, critical: c.critical, required: true })),
   );
+  // Any effect this execution left unaccounted for holds the gate, whatever the verdict or flaky-result policy says.
+  for (const p of planned) {
+    for (const r of await intents.openFor(p.scenario.id, p.profile)) gate.reasons.push(`effect obligation ${r.intent_id} (${r.contract_intent ?? r.effect} in ${p.scenario.id}@${p.profile}) is ${r.state}${r.detail ? `: ${r.detail}` : ''}`);
+  }
+  gate.eligible = gate.reasons.length === 0;
   const cleanupFailures = cases.filter((c) => c.cleanup.status === 'failed');
   if (cleanupFailures.length) gate.reasons.push(...cleanupFailures.map((c) => `${c.scenario_id}@${c.execution_profile}: cleanup failed (${c.cleanup.detail ?? ''})`));
 
@@ -207,4 +228,8 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
   await writeFile(join(runDir, 'junit.xml'), toJUnit(report));
   await writeFile(join(runDir, 'report.html'), toHtml(report));
   return { report, runDir };
+}
+
+function describeHeld(held: IntentRecord[]): string {
+  return `${held.length} earlier effect(s) unresolved (${held.map((r) => `${r.intent_id} ${r.contract_intent ?? r.effect} is ${r.state}`).join('; ')}); adjudicate before re-running`;
 }
