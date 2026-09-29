@@ -58,6 +58,13 @@ export interface GateConfig {
     authorized_until?: string | null;
     /** Clock for `authorized_until` (tests); defaults to the system clock. */
     clock?: () => Date;
+    /**
+     * Live authorization (review-3 N3): consulted immediately before every
+     * calibrated action, so an operator's revocation reaches a shard that is
+     * already running. It must confirm the same qualification is still
+     * current; any other answer — or an error establishing it — routes.
+     */
+    authorization?: { qualification_id: string; check(): Promise<{ ok: true } | { ok: false; reason: string }> };
   };
 }
 
@@ -244,7 +251,8 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
   if (mode === 'calibrated') {
     const cal = c.calibrated;
     if (!cal) return routeOrAbstain([...reasons, c.calibration_version ? 'calibration_unqualified' : 'calibration_missing']);
-    if (cal.authorized_until !== undefined) {
+    // With a live authorization check, expiry is enforced by that check (so a renewal reaches a running shard too).
+    if (cal.authorized_until !== undefined && !cal.authorization) {
       const until = cal.authorized_until === null ? NaN : Date.parse(cal.authorized_until);
       if (!Number.isFinite(until) || (cal.clock?.() ?? new Date()).getTime() >= until) return routeOrAbstain([...reasons, 'qualification_expired']);
     }
@@ -253,6 +261,10 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
     if (!cal.supported(features)) reasons.push('cohort_uncalibrated');
     else if (cal.score(features) < cal.threshold) reasons.push('calibrated_score_low');
     if (reasons.some((r) => r !== 'candidates_truncated')) return routeOrAbstain(reasons);
+    if (cal.authorization) {
+      const a = await cal.authorization.check().catch((e: Error) => ({ ok: false as const, reason: `authorization could not be established: ${e.message}` }));
+      if (!a.ok) return routeOrAbstain([...reasons, 'qualification_not_current']);
+    }
     return { outcome: 'ACT', op, node_id: nodeId, parameter_ref: parameterRef, reason_codes: [...reasons, `calibrated:${cal.version_id}`], features };
   }
 

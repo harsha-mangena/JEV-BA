@@ -379,9 +379,21 @@ export class JobWorker {
     const gate = this.o.exploration?.gate;
     if (!gate || autonomyMode(gate) !== 'calibrated') return gate;
     const cal = gate.calibrated;
-    const q = cal && this.orch.deps.qualifications ? await this.orch.deps.qualifications.find({ project_id: projectId, environment, application, resolved_model: cal.model ?? '' }, { id: cal.version_id, decision_config_digest: cal.decision_config_digest }).catch(() => null) : null;
-    // The grant is time-bounded: the gate re-checks its expiry at every decision, so a long shard cannot outlive it.
-    if (q && cal) return { ...gate, calibrated: { ...cal, authorized_until: q.expires_at ?? null } };
+    const registry = this.orch.deps.qualifications;
+    const profile = { project_id: projectId, environment, application, resolved_model: cal?.model ?? '' };
+    const calibration = cal ? { id: cal.version_id, decision_config_digest: cal.decision_config_digest } : null;
+    const q = cal && registry ? await registry.find(profile, calibration!).catch(() => null) : null;
+    if (q && cal && registry) {
+      // The grant is time-bounded (expiry re-checked at every decision) and revocable: immediately before every
+      // calibrated action the gate asks the registry again whether this same qualification is still current.
+      const check = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+        const now = await registry.find(profile, calibration!);
+        if (!now) return { ok: false, reason: 'the qualification was revoked or has expired' };
+        if (now.id !== q.id) return { ok: false, reason: `a different qualification (${now.id}) now covers this profile` };
+        return { ok: true };
+      };
+      return { ...gate, calibrated: { ...cal, authorized_until: q.expires_at ?? null, authorization: { qualification_id: q.id, check } } };
+    }
     this.log(`calibrated autonomy is not qualified (or no longer qualified) for ${projectId}/${environment} (${application}); running exploration in shadow mode`);
     return { ...gate, mode: 'shadow' };
   }
