@@ -31,7 +31,13 @@
       ],
       "external_prerequisite": "QA_S1_API_KEY for api.typesafe.ai; the provider API reference host is not reachable from the build environment, so the encoding follows the public Go client and must be confirmed by the live probe",
       "scope": "S1 provider adapter",
-      "notes": "Questions are a keyed map {type, instructions, criteria}; choice criteria map option keys to descriptions; answers decode choice {choice, probabilities, confidence} and noul {noul}; type mismatches are invalid heads. Offline verified; the live lane is BLOCKED without credentials and never counted as passing."
+      "notes": "Questions are a keyed map {type, instructions, criteria}; choice criteria map option keys to descriptions; answers decode choice {choice, probabilities, confidence} and noul {noul}; type mismatches are invalid heads. Offline verified; the live lane is BLOCKED without credentials and never counted as passing.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "BLOCKED: QA_S1_API_KEY missing; offline wire-format tests only",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F02",
@@ -53,7 +59,13 @@
       ],
       "external_prerequisite": null,
       "scope": "fixture-shop application contract",
-      "notes": "One authorizeAction service for regression steps, exploration (gate stages 2/3 and dispatch), S2 selections, start navigation and reload assertions. Denials are asserted against the fixture application's write journal and the adapter entity oracle. Each additional target must author its own application contract (phase 10 onboarding)."
+      "notes": "One authorizeAction service for regression steps, exploration (gate stages 2/3 and dispatch), S2 selections, start navigation and reload assertions. Denials are asserted against the fixture application's write journal and the adapter entity oracle. Each additional target must author its own application contract (phase 10 onboarding).",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F03",
@@ -74,7 +86,13 @@
       ],
       "external_prerequisite": null,
       "scope": "Linux runner with unprivileged user namespaces (CI sets kernel.apparmor_restrict_unprivileged_userns=0)",
-      "notes": "Generated specs run only inside user/mount/net/pid/ipc/uts namespaces as an unprivileged user: pivot_root onto a tmpfs root with read-only system binds, the work directory as the only writable host path, loopback-only networking with a relay to the application under test, zero capabilities with no_new_privs, rlimits and a process-group kill on timeout. No host fallback. A TypeScript AST allow-list lint rejects the audit spec and its re-spellings before anything runs. Memory is not cgroup-limited (documented residual)."
+      "notes": "Generated specs run only inside user/mount/net/pid/ipc/uts namespaces as an unprivileged user: pivot_root onto a tmpfs root with read-only system binds, the work directory as the only writable host path, loopback-only networking with a relay to the application under test, zero capabilities with no_new_privs, rlimits and a process-group kill on timeout. No host fallback. A TypeScript AST allow-list lint rejects the audit spec and its re-spellings before anything runs. Memory is not cgroup-limited (documented residual).",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F04",
@@ -93,7 +111,13 @@
       ],
       "external_prerequisite": null,
       "scope": "gate and exploration driver",
-      "notes": "Modes shadow / heuristic_staging / calibrated. Any configuration claiming calibration is calibrated mode and never falls back to heuristic action; an unqualified calibration (no Act band), a missing resolved model or a decision-config digest mismatch routes instead of acting. The digest binds the resolved (not requested) model. Heuristic and S2-selected actions are refused in production and in calibrated mode. The service defaults to shadow (QA_AUTONOMY_MODE). Qualification of an Act band on representative data remains phase 11."
+      "notes": "Modes shadow / heuristic_staging / calibrated. Any configuration claiming calibration is calibrated mode and never falls back to heuristic action; an unqualified calibration (no Act band), a missing resolved model or a decision-config digest mismatch routes instead of acting. The digest binds the resolved (not requested) model. Heuristic and S2-selected actions are refused in production and in calibrated mode. The service defaults to shadow (QA_AUTONOMY_MODE). Qualification of an Act band on representative data remains phase 11.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F05",
@@ -111,7 +135,13 @@
       ],
       "external_prerequisite": null,
       "scope": "orchestrator gate and promotion",
-      "notes": "The suite revision is the digest of an execution snapshot (spec/policy/catalog files, contract version, required profiles, scenario filter, retries, signed-out path, engine version), stored per run with a monotonic generation. Promotions are single-use decisions bound to run attempt, suite revision and generation, re-checked at consumption and expiring. Reused delivery ids with different payloads are rejected; status publishing is serialized per run. Re-audit R2/R3 extend closure: the full execution contract and per-channel lineage with serialized generations."
+      "notes": "The suite revision is the digest of an execution snapshot (spec/policy/catalog files, contract version, required profiles, scenario filter, retries, signed-out path, engine version), stored per run with a monotonic generation. Promotions are single-use decisions bound to run attempt, suite revision and generation, re-checked at consumption and expiring. Reused delivery ids with different payloads are rejected; status publishing is serialized per run. Re-audit R2/R3 extend closure: the full execution contract and per-channel lineage with serialized generations.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F06",
@@ -129,7 +159,13 @@
       ],
       "external_prerequisite": null,
       "scope": "evidence publication",
-      "notes": "Trace archives are rewritten before registration: credential headers and cookies blanked, every registered secret removed in plain, URL, base64 and JSON-escaped forms, then re-scanned; an unreadable archive or residual hit withholds the artifact. All written artifacts pass the same redaction and canary scan; screenshots mask password inputs. Re-audit R4 extends closure to pixels: masking before capture, image-free sanitized traces."
+      "notes": "Trace archives are rewritten before registration: credential headers and cookies blanked, every registered secret removed in plain, URL, base64 and JSON-escaped forms, then re-scanned; an unreadable archive or residual hit withholds the artifact. All written artifacts pass the same redaction and canary scan; screenshots mask password inputs. Re-audit R4 extends closure to pixels: masking before capture, image-free sanitized traces.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F07",
@@ -150,7 +186,13 @@
       ],
       "external_prerequisite": "ANTHROPIC_API_KEY (and optionally QA_S2_MODEL) for the live vision probe; the live_s2 lane is BLOCKED without it",
       "scope": "S2 escalation",
-      "notes": "AnthropicVisionS2Provider calls the Messages API with structured output and a masked PNG screenshot; untrusted page state is delimited as data; refusals and unusable output become ABSTAIN; proposals are re-validated against the observation and re-gated. Requested context is fulfilled (screenshot, expanded candidate list, scroll, wait); subgoals are bounded (2 per milestone); S2 calls are bounded by the scenario budget. Offline verified against a local Messages API double."
+      "notes": "AnthropicVisionS2Provider calls the Messages API with structured output and a masked PNG screenshot; untrusted page state is delimited as data; refusals and unusable output become ABSTAIN; proposals are re-validated against the observation and re-gated. Requested context is fulfilled (screenshot, expanded candidate list, scroll, wait); subgoals are bounded (2 per milestone); S2 calls are bounded by the scenario budget. Offline verified against a local Messages API double.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "BLOCKED: ANTHROPIC_API_KEY missing; offline tests with a recorded/stubbed provider only",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F08",
@@ -169,7 +211,13 @@
       ],
       "external_prerequisite": null,
       "scope": "provider transport and attempt deadlines",
-      "notes": "Every provider call combines the caller signal with its own timeout (AbortSignal.any), caps request/response bytes, retries only network/408/429/5xx with jittered backoff honouring Retry-After, and stops on cancellation. Each attempt has one signal (run cancellation plus wall-clock deadline) passed to S1, S2 and adapter calls."
+      "notes": "Every provider call combines the caller signal with its own timeout (AbortSignal.any), caps request/response bytes, retries only network/408/429/5xx with jittered backoff honouring Retry-After, and stops on cancellation. Each attempt has one signal (run cancellation plus wall-clock deadline) passed to S1, S2 and adapter calls.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F09",
@@ -191,7 +239,13 @@
       "evidence": [
         "docs/evidence/phase2/crash-recovery.json"
       ],
-      "notes": "PREPARED and DISPATCHING are written (fenced) before input. A worker process group killed with SIGKILL mid-checkout is recovered: the intent is reconciled from the application by idempotency key (RECONCILED, one receipt, one order), the shard reruns with a fresh fixture, and the orphan fixture is swept. Mutations the adapter does not key go to NEEDS_REVIEW rather than being guessed. Re-audit R1 extends closure: acknowledged-but-unconfirmed mutations and review obligations now hold the gate until verified or adjudicated."
+      "notes": "PREPARED and DISPATCHING are written (fenced) before input. A worker process group killed with SIGKILL mid-checkout is recovered: the intent is reconciled from the application by idempotency key (RECONCILED, one receipt, one order), the shard reruns with a fresh fixture, and the orphan fixture is swept. Mutations the adapter does not key go to NEEDS_REVIEW rather than being guessed. Re-audit R1 extends closure: acknowledged-but-unconfirmed mutations and review obligations now hold the gate until verified or adjudicated.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "F10",
@@ -208,7 +262,13 @@
       ],
       "external_prerequisite": "Firefox/WebKit binaries to execute those profiles (they are reported BLOCKED unsupported_capability, never skipped, on runners without them)",
       "scope": "observation and executors",
-      "notes": "Exploration executes CLICK, TYPE, SELECT (page-offered option, heuristic mode only) and SCROLL; open shadow roots are extracted and actionable; frame content is not extracted and a decision blocked by it ends as unsupported_capability; repeated page states stop the explorer (loop detection)."
+      "notes": "Exploration executes CLICK, TYPE, SELECT (page-offered option, heuristic mode only) and SCROLL; open shadow roots are extracted and actionable; frame content is not extracted and a decision blocked by it ends as unsupported_capability; repeated page states stop the explorer (loop detection).",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "P8-VISUAL",
@@ -228,7 +288,13 @@
       ],
       "external_prerequisite": "Firefox/WebKit binaries for those profiles; ANTHROPIC_API_KEY for the advisory reviewer (QA_VISUAL_REVIEWER=anthropic)",
       "scope": "visual checks",
-      "notes": "Baselines are keyed by a rendering digest (browser, version, OS, viewport, DPR, locale, timezone, colour scheme, reduced motion, font/rasterizer probe). Approvals are compare-and-set on the version the reviewer saw (exclusive version claim in the store, unique version row in PostgreSQL). The Claude reviewer only attaches a hint; approvals stay human."
+      "notes": "Baselines are keyed by a rendering digest (browser, version, OS, viewport, DPR, locale, timezone, colour scheme, reduced motion, font/rasterizer probe). Approvals are compare-and-set on the version the reviewer saw (exclusive version claim in the store, unique version row in PostgreSQL). The Claude reviewer only attaches a hint; approvals stay human.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "P9-SELECTION",
@@ -248,7 +314,13 @@
       "evidence": [
         "docs/evidence/phase9/selection-recall.json"
       ],
-      "notes": "fixture-shop benchmark: 13/13 seeded defects selected by at least one detecting scenario (recall 1.0, mean selected fraction 0.78); a wrong component mapping is shown to reduce recall. Advisory exploration shards never delay or block the required gate."
+      "notes": "fixture-shop benchmark: 13/13 seeded defects selected by at least one detecting scenario (recall 1.0, mean selected fraction 0.78); a wrong component mapping is shown to reduce recall. Advisory exploration shards never delay or block the required gate.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "P10-OPS",
@@ -268,7 +340,13 @@
       "evidence": [
         "docs/evidence/phase10/demo-flow.json"
       ],
-      "notes": "Dockerfile and docker-compose.yml; qa doctor and fail-closed startup checks for api/worker; token-protected /metrics. The demo flow ran unattended on the built image: clean deployment promoted once (replay refused), defective deployment held and refused, worker SIGKILLed mid-checkout recovered (DISPATCHING → RECONCILING → RECONCILED across fences 1→2, one receipt) and orphaned fixtures swept. An unkeyed notes.delete in flight at the kill was correctly left in NEEDS_REVIEW."
+      "notes": "Dockerfile and docker-compose.yml; qa doctor and fail-closed startup checks for api/worker; token-protected /metrics. The demo flow ran unattended on the built image: clean deployment promoted once (replay refused), defective deployment held and refused, worker SIGKILLed mid-checkout recovered (DISPATCHING → RECONCILING → RECONCILED across fences 1→2, one receipt) and orphaned fixtures swept. An unkeyed notes.delete in flight at the kill was correctly left in NEEDS_REVIEW.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "none",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "P11-QUALIFICATION",
@@ -288,7 +366,13 @@
       "evidence": [
         "docs/evidence/phase11/qualification-status.json"
       ],
-      "notes": "The qualification rules, registry, qa qualify command and worker enforcement are implemented and tested; no profile is qualified, so calibrated exploration runs in shadow mode everywhere. This is the declared state, not a pass."
+      "notes": "The qualification rules, registry, qa qualify command and worker enforcement are implemented and tested; no profile is qualified, so calibrated exploration runs in shadow mode everywhere. This is the declared state, not a pass.",
+      "levels": {
+        "mechanism": "implemented (registry, expiry, revocation, live checks)",
+        "fixture_proof": "unit tests only; no representative labelled data",
+        "provider_proof": "BLOCKED: no live compatibility record",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "CONC",
@@ -307,7 +391,13 @@
       "evidence": [
         "docs/evidence/phase2/admission-race-baseline.json"
       ],
-      "notes": "The pre-phase-2 lease query admitted 11 concurrent leases against a quota of 2 (12 workers, docs/evidence/phase2/admission-race-probe.mts). Admission now locks the tenant row while counting; every lease increments a fence that guards heartbeats, intents, results and completion."
+      "notes": "The pre-phase-2 lease query admitted 11 concurrent leases against a quota of 2 (12 workers, docs/evidence/phase2/admission-race-probe.mts). Admission now locks the tenant row while counting; every lease increments a fence that guards heartbeats, intents, results and completion.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "R1",
@@ -332,7 +422,13 @@
         "docs/evidence/reaudit/",
         "docs/evidence/reaudit-service/obligation-hold.json"
       ],
-      "notes": "ACKNOWLEDGED mutations are reconciled on recovery (keyed: looked up; unkeyed: review) and SETTLED only when their attempt ends under the live lease. NEEDS_REVIEW stays outstanding across fences and attempts until an audited admin adjudication. Cases with open obligations are never replayed; aggregation and the live gate (decide and consume) consult every obligation of the deployment, including in-flight advisory effects. PostgreSQL tests SIGKILL real workers at the ack/confirmation boundary and during an unkeyed deletion, restart twice, and show no blind replay and a held gate until adjudication plus retry."
+      "notes": "ACKNOWLEDGED mutations are reconciled on recovery (keyed: looked up; unkeyed: review) and SETTLED only when their attempt ends under the live lease. NEEDS_REVIEW stays outstanding across fences and attempts until an audited admin adjudication. Cases with open obligations are never replayed; aggregation and the live gate (decide and consume) consult every obligation of the deployment, including in-flight advisory effects. PostgreSQL tests SIGKILL real workers at the ack/confirmation boundary and during an unkeyed deletion, restart twice, and show no blind replay and a held gate until adjudication plus retry. Review-3 N2 closes the in-process retry path.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "R2",
@@ -352,7 +448,13 @@
       ],
       "external_prerequisite": null,
       "scope": "submission, execution, aggregation, gate, promotion",
-      "notes": "The run revision digests suite files and settings, environment policy, oracle adapter identity/version and endpoint (credential reference hashed), version verification, approved baselines frozen at submission, pinned browser builds and profile options, and the decision configuration that can decide a required verdict. Compared at submission, before each shard, at aggregation and at every gate evaluation; each setting changed alone disqualifies the old run and decision; only a new execution regains eligibility."
+      "notes": "The run revision digests suite files and settings, environment policy, oracle adapter identity/version and endpoint (credential reference hashed), version verification, approved baselines frozen at submission, pinned browser builds and profile options, and the decision configuration that can decide a required verdict. Compared at submission, before each shard, at aggregation and at every gate evaluation; each setting changed alone disqualifies the old run and decision; only a new execution regains eligibility.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "R3",
@@ -367,7 +469,13 @@
       ],
       "external_prerequisite": "Real deployment-controller integration at its promotion boundary (the consume response carries deployment, channel and generation to bind to) and live GitHub/Vercel verification",
       "scope": "deployment verification, storage, supersession, gate, promotion, status publication",
-      "notes": "Environments declare lineage single or per_channel. Ordering from verified provider sequence (GitHub id, Vercel createdAt, pipeline sequence) or serialized arrival, fixed per lineage; late old events are stale, ties hold the lineage. A locked channel row serializes generation allocation, current candidate and consume. Delivery identity is tenant/project scoped; a replaced same-commit deployment never overwrites the current candidate status."
+      "notes": "Environments declare lineage single or per_channel. Ordering from verified provider sequence (GitHub id, Vercel createdAt, pipeline sequence) or serialized arrival, fixed per lineage; late old events are stale, ties hold the lineage. A locked channel row serializes generation allocation, current candidate and consume. Delivery identity is tenant/project scoped; a replaced same-commit deployment never overwrites the current candidate status.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "none: GitHub/Vercel verification exercised only against local fakes",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "R4",
@@ -384,7 +492,13 @@
       ],
       "external_prerequisite": null,
       "scope": "evidence screenshots, visual checkpoints, S2 request images, traces",
-      "notes": "Secrets in rendered text or form values (all frames, open shadow roots, split or transformed), declared selectors and uninspectable content are masked in the page before capture and re-checked after; otherwise the image is withheld. Traces carry no screencast frames and the sanitized derivative omits every image resource. Limit: secrets drawn by the server into ordinary images are only masked when their selector is declared (policy privacy.mask_selectors)."
+      "notes": "Secrets in rendered text or form values (all frames, open shadow roots, split or transformed), declared selectors and uninspectable content are masked in the page before capture and re-checked after; otherwise the image is withheld. Traces carry no screencast frames and the sanitized derivative omits every image resource. Limit: secrets drawn by the server into ordinary images are only masked when their selector is declared (policy privacy.mask_selectors). Review-3 N1 extends it to generated content and the full painted extent with pixel verification.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     },
     {
       "id": "R5",
@@ -402,7 +516,109 @@
       ],
       "external_prerequisite": null,
       "scope": "qualification registry, worker, calibrated gate",
-      "notes": "Records expire with their compatibility evidence; expiry and revocation are enforced on every lookup with a testable clock and re-checked by the gate at every calibrated decision; corrupt/legacy records never authorize; renewal requires a current probe of the exact model. Calibrated autonomy itself remains BLOCKED (see PH11)."
+      "notes": "Records expire with their compatibility evidence; expiry and revocation are enforced on every lookup with a testable clock and re-checked by the gate at every calibrated decision; corrupt/legacy records never authorize; renewal requires a current probe of the exact model. Calibrated autonomy itself remains BLOCKED (see PH11). Review-3 N3 makes revocation reach running shards.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "N1",
+      "title": "Pixel masking covers generated content and the full painted extent, verified on pixels",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit3.test.ts#N1a",
+        "tests/audit/reaudit3.test.ts#N1b",
+        "tests/e2e/pixel-privacy.test.ts"
+      ],
+      "lanes": [
+        "audit",
+        "e2e"
+      ],
+      "external_prerequisite": null,
+      "scope": "evidence screenshots, visual candidates and diffs, S2 request images",
+      "notes": "Detection includes ::before/::after/::marker content (attr() resolved). Overlays cover element box, text line boxes and descendant boxes. A second capture with all sensitive content invisible must match the first beyond rasterization noise, or the image is withheld (catches text-shadow, transforms and anything detection misses).",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "N2",
+      "title": "No in-process retry of a case with an unresolved effect; standalone gate holds",
+      "phase": 2,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit3.test.ts#N2a",
+        "tests/audit/reaudit3.test.ts#N2b",
+        "tests/e2e/retry-obligations.test.ts",
+        "tests/service/obligations.test.ts"
+      ],
+      "lanes": [
+        "audit",
+        "e2e",
+        "service"
+      ],
+      "external_prerequisite": null,
+      "scope": "runSuite retries (CLI and service shards), standalone report gate",
+      "notes": "One intent store per logical execution; open obligations checked before every attempt (own attempts included); held cases end NEEDS_REVIEW with first-attempt evidence; every open obligation is a gate reason regardless of critical/flaky policy.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "N3",
+      "title": "Revocation reaches running shards",
+      "phase": 11,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit3.test.ts#N3",
+        "packages/orchestrator/test/qualification-runtime.test.ts"
+      ],
+      "lanes": [
+        "audit",
+        "unit"
+      ],
+      "external_prerequisite": null,
+      "scope": "worker grant, calibrated gate",
+      "notes": "The calibrated gate re-checks the same qualification with the registry immediately before every calibrated action; errors fail closed; renewal is picked up live.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "MEM",
+      "title": "Enforced memory limit for sandboxed generated code",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/isolation/sandbox.test.ts#enforced memory limit",
+        "tests/e2e/compiler.test.ts"
+      ],
+      "lanes": [
+        "isolation",
+        "e2e"
+      ],
+      "external_prerequisite": "A delegated cgroup (QA_SANDBOX_CGROUP) wherever generated specs are validated; without one, validation errors instead of running",
+      "scope": "namespace sandbox",
+      "notes": "Per-run cgroup (v2, or v1 memory/pids) joined before any untrusted code runs; OOM kills reported; no fallback. Verified locally on cgroup v1 and in CI on cgroup v2.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
     }
   ],
   "reaudit": {
@@ -413,5 +629,20 @@
       "docs/evidence/reaudit/probes-after-fix.txt"
     ],
     "report": "docs/reaudit-closure.md"
+  },
+  "evidence_levels": {
+    "mechanism": "implemented | partial | absent — the code path exists and is exercised by offline tests",
+    "fixture_proof": "what was demonstrated against the controlled fixture application (browser, PostgreSQL, Docker demo)",
+    "provider_proof": "authenticated live-provider verification (Jev/TypeSafe, Anthropic, GitHub, Vercel); \"not applicable\" when no provider is involved",
+    "target_qualification": "evidence on a real target application / deployment integration; none exists yet for any item"
+  },
+  "review3": {
+    "reviewed_revision": "c70d0ef28c9a0d2073b7defc9fd734812a82ae90",
+    "probes": "tests/audit/reaudit3.test.ts",
+    "evidence": [
+      "docs/evidence/reaudit3/probes-at-c70d0ef.txt",
+      "docs/evidence/reaudit3/probes-after-fix.txt"
+    ],
+    "report": "docs/review3-closure.md"
   }
 }
