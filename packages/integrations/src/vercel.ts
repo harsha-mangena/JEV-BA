@@ -20,6 +20,7 @@ export interface VercelDeployment {
   url: string;
   readyState?: string;
   target?: string | null;
+  createdAt?: number;
   meta?: Record<string, string>;
 }
 
@@ -74,8 +75,10 @@ export class VercelDeploymentVerifier implements DeploymentVerifier {
       { check: 'environment_matches', ok: vercelEnvironment(d.target) === claim.environment, detail: `provider=${vercelEnvironment(d.target)}` },
       { check: 'url_matches', ok: claim.candidate_url === null || claim.candidate_url === url, detail: `provider=${url}` },
     ];
+    const channel = d.meta?.githubPrId ? `pr:${d.meta.githubPrId}` : d.meta?.githubCommitRef ? `ref:${d.meta.githubCommitRef}` : null;
+    if (claim.channel !== undefined) checks.push({ check: 'channel_matches', ok: claim.channel === channel, detail: `provider=${channel ?? 'none'}` });
     if (checks.some((c) => !c.ok)) throw new DeploymentVerificationError(`deployment claim rejected: ${checks.filter((c) => !c.ok).map((c) => c.check).join(', ')}`, checks);
-    return { deployment_id: d.id, environment: vercelEnvironment(d.target), commit_sha: sha, immutable_url: url, checks };
+    return { deployment_id: d.id, environment: vercelEnvironment(d.target), commit_sha: sha, immutable_url: url, checks, channel, sequence: typeof d.createdAt === 'number' ? d.createdAt : null };
   }
 }
 

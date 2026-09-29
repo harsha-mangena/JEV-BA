@@ -50,6 +50,14 @@ export interface GateConfig {
     threshold: number;
     score(f: GateFeatures): number;
     supported(f: GateFeatures): boolean;
+    /**
+     * End of the qualification that authorizes this calibration (re-audit R5).
+     * Checked at every decision, so a long-running worker stops acting the
+     * moment its authorization expires.
+     */
+    authorized_until?: string | null;
+    /** Clock for `authorized_until` (tests); defaults to the system clock. */
+    clock?: () => Date;
   };
 }
 
@@ -236,6 +244,10 @@ export async function evaluateGate(g: GateInput): Promise<GateDecision> {
   if (mode === 'calibrated') {
     const cal = c.calibrated;
     if (!cal) return routeOrAbstain([...reasons, c.calibration_version ? 'calibration_unqualified' : 'calibration_missing']);
+    if (cal.authorized_until !== undefined) {
+      const until = cal.authorized_until === null ? NaN : Date.parse(cal.authorized_until);
+      if (!Number.isFinite(until) || (cal.clock?.() ?? new Date()).getTime() >= until) return routeOrAbstain([...reasons, 'qualification_expired']);
+    }
     if (!g.model?.resolved) return routeOrAbstain([...reasons, 'resolved_model_unknown']);
     if (g.decision_config_digest !== cal.decision_config_digest) return routeOrAbstain([...reasons, 'calibration_config_mismatch']);
     if (!cal.supported(features)) reasons.push('cohort_uncalibrated');

@@ -13,7 +13,7 @@ passed.
 | Scroll | — | ✅ | Effect-free, budgeted, loop-detected |
 | Upload, drag, canvas | ❌ | ❌ | Out of scope |
 | Open shadow DOM | ✅ (Playwright locators) | ✅ | Extracted and actionable; closed roots are invisible by design |
-| iframes | ❌ | ❌ | Counted in coverage; a decision blocked by frame-only content ends `unsupported_capability` |
+| iframes | ❌ | ❌ | Counted in coverage; a decision blocked by frame-only content ends `unsupported_capability`; frames are inspected (same-origin) or masked (cross-origin) in images |
 | UI assertions (visible/hidden/text/url/focus) | ✅ | ✅ | Strict: ambiguous locators fail |
 | Backend oracles (entity deltas, integer totals) | ✅ | ✅ | Via the fixture service; unavailable in read-only profile |
 | Visual baselines | ✅ | — | Per scenario/checkpoint/profile/rendering profile; explicit approval |
@@ -27,6 +27,9 @@ passed.
 | Live S1 providers | — | TypeSafe/Jev (published questions-map contract; live probe required), neutral HTTP | Bounded transport; `qa s1 probe` writes a compatibility record |
 | System Two | — | Claude vision (`QA_S2_PROVIDER=anthropic`) | Masked screenshots; context requests fulfilled; proposals re-gated |
 | Effect authorization | ✅ | ✅ | Trusted application contract (intents, routes, scoped control bindings); unknown effects denied |
-| Durable intents and reconciliation | ✅ | ✅ | PREPARED/DISPATCHING persisted before input; keyed effects reconciled from the application after crashes |
+| Durable intents and reconciliation | ✅ | ✅ | PREPARED/DISPATCHING persisted before input; keyed effects (fixture-shop: `checkout.submit`, `cart.add`) reconciled from the application after crashes, including acknowledged-but-unconfirmed ones; anything unverifiable is an obligation that holds the gate until adjudicated; cases with open obligations are never replayed |
+| Execution contract | ✅ | ✅ | Suite, environment policy, oracle adapter/endpoint, version verification, frozen baselines, browser builds; re-checked at execution, aggregation and promotion |
+| Deployment lineage | ✅ | — | Single or per-channel (e.g. PR previews); provider-ordered or arrival-ordered; serialized generations and promotion consumption |
+| Pixel privacy | ✅ | ✅ (S2 images) | Secrets in rendered text/values, declared selectors and uninspectable content masked before capture (else withheld); traces published without images |
 | Generated-spec validation | ✅ (namespace sandbox) | — | Linux user namespaces required; no host fallback |
-| Autonomy modes | — | shadow (default), heuristic staging, calibrated | Calibrated only for a qualified profile (`qa qualify`); otherwise shadow |
+| Autonomy modes | — | shadow (default), heuristic staging, calibrated | Calibrated only for a qualified, unexpired, unrevoked profile (`qa qualify`, `qa qualification renew|revoke`), re-checked at every decision; otherwise shadow |

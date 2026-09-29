@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ApplicationAdapter, EffectLookup } from '@qa/oracles';
-import { IllegalTransition, MemoryIntentStore, reconcileIntent, recoverIntents, type IntentRecord } from '../src/intents.ts';
+import { IllegalTransition, MemoryIntentStore, reconcileIntent, recoverIntents, type NewIntent } from '../src/intents.ts';
 
 function adapter(lookups: EffectLookup[], keyed = ['checkout.submit']): ApplicationAdapter & { calls: number } {
   const a = {
@@ -19,7 +19,7 @@ function adapter(lookups: EffectLookup[], keyed = ['checkout.submit']): Applicat
   return a;
 }
 
-const base: Omit<IntentRecord, 'state' | 'detail' | 'receipts'> = {
+const base: NewIntent = {
   intent_id: 'a1.i2',
   attempt_id: 'a1',
   scenario_id: 'checkout',
@@ -75,7 +75,7 @@ describe('reconciliation', () => {
 });
 
 describe('recovery after worker loss', () => {
-  it('resolves PREPARED as never dispatched and reconciles DISPATCHING against the application', async () => {
+  it('resolves PREPARED as never dispatched and reconciles DISPATCHING and unconfirmed acknowledgements against the application', async () => {
     const s = new MemoryIntentStore();
     await s.prepare({ ...base, intent_id: 'p', idempotency_key: 'p' });
     await s.prepare(base);
@@ -84,7 +84,7 @@ describe('recovery after worker loss', () => {
     await s.transition('done', 'DISPATCHING');
     await s.transition('done', 'ACKNOWLEDGED');
     const out = await recoverIntents(s, adapter([{ receipts: [receipt()], in_flight: 0 }]));
-    expect(Object.fromEntries(out.map((r) => [r.intent_id, r.state]))).toEqual({ p: 'NOT_DISPATCHED', [base.intent_id]: 'RECONCILED' });
+    expect(Object.fromEntries(out.map((r) => [r.intent_id, r.state]))).toEqual({ p: 'NOT_DISPATCHED', [base.intent_id]: 'RECONCILED', done: 'RECONCILED' });
     expect((await s.get(base.intent_id))!.receipts).toEqual([receipt()]);
     expect(await s.unresolved()).toEqual([]);
   });

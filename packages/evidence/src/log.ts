@@ -76,7 +76,7 @@ export class EvidenceLog {
       const s = sanitizeTraceArchive(await readFile(absPath), this.redactor.values());
       if (s.residualHits > 0) throw new Error(`${s.residualHits} secret(s) still present after sanitization`);
       await writeFile(absPath, s.bytes);
-      this.record('artifact', `${kind} sanitized (${s.redactedEntries.length} of ${s.entries} entries redacted)`, { redacted_entries: s.redactedEntries });
+      this.record('artifact', `${kind} sanitized (${s.redactedEntries.length} of ${s.entries} entries redacted, ${s.omittedImages.length} image(s) omitted)`, { redacted_entries: s.redactedEntries, omitted_images: s.omittedImages.length });
       return this.registerArtifact(kind, absPath, s.bytes);
     } catch (e) {
       await rm(absPath, { force: true });

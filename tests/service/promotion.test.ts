@@ -63,10 +63,10 @@ describe.skipIf(!DATABASE_URL)('execution snapshot, lineage and promotion (compl
     const b = await app(SHA_B);
     const r1 = await deploy(h, 'd-1', SHA_A, a.url);
     const r2 = await deploy(h, 'd-2', SHA_B, b.url);
-    const rows = (await h.db.query<{ id: string; generation: string; execution_snapshot: { required_profiles: string[]; engine: string }; suite_revision: string }>('select id, generation::text, execution_snapshot, suite_revision from runs order by generation')).rows;
+    const rows = (await h.db.query<{ id: string; generation: string; execution_snapshot: { suite: { required_profiles: string[]; engine: string } }; suite_revision: string }>('select id, generation::text, execution_snapshot, suite_revision from runs order by generation')).rows;
     expect(rows.map((r) => [r.id, r.generation])).toEqual([[r1, '1'], [r2, '2']]);
-    expect(rows[0]!.execution_snapshot.required_profiles).toEqual(['chromium_desktop']);
-    expect(rows[0]!.execution_snapshot.engine).toMatch(/^engine-/);
+    expect(rows[0]!.execution_snapshot.suite.required_profiles).toEqual(['chromium_desktop']);
+    expect(rows[0]!.execution_snapshot.suite.engine).toMatch(/^engine-/);
   });
 
   it('a promotion decision is consumed exactly once and only while the gate still holds for the same run', async () => {

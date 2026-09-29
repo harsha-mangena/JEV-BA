@@ -21,9 +21,12 @@ export interface OwnedOrder {
  * backend state independently of the UI. Every call is bounded by its own
  * timeout *and* the caller's signal (attempt cancellation/deadline).
  */
+/** Identity of this adapter (bound into every execution contract that uses it). */
+export const FIXTURE_ADAPTER = { id: 'fixture-shop', adapter_version: 'fixture-shop-adapter/3' } as const;
+
 export class FixtureClient implements ApplicationAdapter {
-  readonly id = 'fixture-shop';
-  readonly adapter_version = 'fixture-shop-adapter/2';
+  readonly id = FIXTURE_ADAPTER.id;
+  readonly adapter_version = FIXTURE_ADAPTER.adapter_version;
   readonly capabilities: AdapterCapabilities = {
     readiness: true,
     fixtures: true,
@@ -33,7 +36,7 @@ export class FixtureClient implements ApplicationAdapter {
     effect_lookup: true,
     idempotency: true,
     cleanup: true,
-    keyed_intents: ['checkout.submit'],
+    keyed_intents: ['checkout.submit', 'cart.add'],
     idempotency_header: 'x-qa-idempotency-key',
   };
 

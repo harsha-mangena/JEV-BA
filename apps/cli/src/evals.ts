@@ -68,3 +68,25 @@ export async function qualifyCmd(a: ServiceArgs): Promise<number> {
   for (const r of record.reasons) console.log(`  - ${r}`);
   return record.state === 'QUALIFIED_FOR_PROFILE' ? 0 : 1;
 }
+
+/** `qa qualification revoke|renew`: operator control over time-bounded grants (re-audit R5). */
+export async function qualificationCmd(sub: string | undefined, a: ServiceArgs): Promise<number> {
+  const need = (k: string) => {
+    const v = a[k];
+    if (typeof v !== 'string' || !v) throw new UsageError(`--${k} is required`);
+    return v;
+  };
+  const reg = new QualificationRegistry(need('qualifications'));
+  if (sub === 'revoke') {
+    const r = await reg.revoke(need('id'), need('by'), need('reason'));
+    console.log(`revoked ${r.qualification_id} at ${r.revoked_at}`);
+    return 0;
+  }
+  if (sub === 'renew') {
+    const compat = JSON.parse(await readFile(need('evidence'), 'utf8')) as NonNullable<QualificationEvidence['provider_compat']>;
+    const r = await reg.renew(need('id'), compat);
+    console.log(r.renewed ? `renewed ${r.record.id} until ${r.record.expires_at}` : `not renewed: ${r.reason}`);
+    return r.renewed ? 0 : 1;
+  }
+  throw new UsageError('qualification revoke|renew');
+}

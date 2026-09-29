@@ -22,10 +22,45 @@ fixture-shop deployments (clean and defective) used by the demo flow.
 | `003_intents_fencing.sql` | `action_intents`, `intent_transitions`, `effect_receipts`, `jobs.fence`, `case_results.fence` |
 | `004_lineage_promotions.sql` | `runs.execution_snapshot`, `runs.generation`, `promotion_decisions` |
 | `005_visual_cas.sql` | unique baseline approval version (compare-and-set) |
+| `006_effect_obligations.sql` | intent state `SETTLED`; `action_intents.adjudication` (review obligations) |
+| `007_execution_contract.sql` | `runs.selection_digest`, `promotion_decisions.selection_digest` |
+| `008_deployment_channels.sql` | `deployment_channels` (lineage lock, generation, current candidate, ordering mode); `channel` on deployments, runs and decisions; `deployments.provider_sequence`; tenant/project-scoped delivery identity |
 
 Upgrade: stop workers (SIGTERM; they finish the current job), run `qa migrate`,
 start the new API, then the new workers. Runs selected under an older execution
-snapshot or engine version no longer qualify for promotion and must be re-run.
+contract or engine version no longer qualify for promotion and must be re-run
+(the contract now covers environment policy, oracle endpoint and adapter,
+version verification, frozen baselines and browser builds). Migration 008
+renumbers existing run generations consecutively, so promotion decisions taken
+before the upgrade are refused; take them again. Delivery records without a
+tenant/project are dropped (they could not be scoped). Qualification records
+written before this release carry no expiry and no longer authorize calibrated
+dispatch: qualify again.
+
+## Operating the release gate
+
+- **Lineage.** Each environment sets `lineage: single` (default; every
+  deployment is one lineage) or `lineage: per_channel` (e.g. pull-request
+  previews: one lineage per verified provider channel — GitHub `ref`, Vercel
+  PR id, or the pipeline's `channel`). A lineage is ordered by verified provider
+  sequence (GitHub deployment id, Vercel `createdAt`, the pipeline's
+  `sequence`) or, when its deployments carry none, by serialized arrival; an
+  older event arriving late is recorded as stale and never tested, and a tie
+  holds the lineage until a strictly newer deployment arrives.
+- **Promotion.** `POST /v1/promotions` then `POST /v1/promotions/:id/consume`.
+  The consume response names the exact `deployment_id`, `commit_sha`, `channel`
+  and `generation`; the deployment controller must promote exactly that.
+- **Effect obligations.** A run's uncertain effects are listed by
+  `GET /v1/runs/:id/obligations`. While any is open, the gate and promotion are
+  held. An admin records what was checked with
+  `POST /v1/intents/:id/adjudicate {resolution: effect_absent|effect_present_accepted|effect_reverted, note}`
+  (audited); held cases then need `POST /v1/runs/:id/retry`.
+- **Privacy.** Every captured image masks registered secrets, uninspectable
+  content and the policy's `privacy.mask_selectors`; declare selectors for
+  regions (e.g. server-rendered images) that can show sensitive data.
+- **Qualification.** Grants expire with their live compatibility evidence;
+  `qa qualification renew` extends one on a current probe of the same model,
+  `qa qualification revoke` ends one immediately.
 
 ## Configuration keys
 
@@ -51,7 +86,7 @@ snapshot or engine version no longer qualify for promotion and must be re-run.
 
 ```sh
 docker build -t jev-ba/qa:local .
-node deploy/demo/run-demo.mjs            # writes docs/evidence/phase10/demo-flow.json
+node deploy/demo/run-demo.mjs            # writes docs/evidence/phase10/demo-flow.json (or --out <dir>)
 ```
 
 The script brings the stack up with `deploy/demo/demo.env` (demo-only values),
@@ -65,8 +100,11 @@ bootstraps a tenant/project/tokens, and then:
 3. submits a third deployment, SIGKILLs the worker container while a checkout
    intent is `DISPATCHING`, starts a replacement; the lease expires, the shard is
    re-leased under a new fence, the intent is reconciled from the application
-   (`RECONCILED` with one order receipt), the run completes with an open gate,
-   and the dead worker's fixtures are swept.
+   (`RECONCILED` with one order receipt) and the run completes; any effect the
+   dead worker left that cannot be verified (an acknowledged but unsettled
+   note write, say) holds the gate and promotion until an admin adjudicates it
+   and the held cases are rerun, after which the deployment promotes; the dead
+   worker's fixtures are swept.
 
 In environments behind a TLS-intercepting proxy, pass the proxy and CA to the
 build: `docker build --build-arg HTTPS_PROXY=… --secret id=npm_ca,src=<ca.pem> …`.

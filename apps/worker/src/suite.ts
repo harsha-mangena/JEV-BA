@@ -35,6 +35,8 @@ export interface SuiteOptions {
   exploration?: ExplorationOptions;
   /** Restrict execution to these cases (sharding). Defaults to every scenario × profile. */
   cases?: Array<{ scenario_id: string; execution_profile: ExecutionProfileId }>;
+  /** Browser builds the execution contract pins (by browser name); a launched browser reporting another build is refused. */
+  browserVersions?: Partial<Record<string, string | null>>;
   hooks?: AttemptHooks;
   quality?: QualityOptions;
   readOnly?: boolean;
@@ -110,7 +112,18 @@ export async function runSuite(o: SuiteOptions): Promise<SuiteResult> {
     if (o.browser) browsers.set('chromium', Promise.resolve(o.browser));
     const browserFor = (name: BrowserName) => {
       let b = browsers.get(name);
-      if (!b) browsers.set(name, (b = launchBrowser(name)));
+      if (!b) {
+        const want = o.browserVersions?.[name];
+        // The execution contract pins the browser build; a runner with another build cannot produce results for it.
+        b = launchBrowser(name).then(async (br) => {
+          if (want && br.version() !== want) {
+            await br.close().catch(() => undefined);
+            throw new Error(`browser build ${br.version()} differs from the execution contract (${want})`);
+          }
+          return br;
+        });
+        browsers.set(name, b);
+      }
       return b;
     };
     try {

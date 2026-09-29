@@ -192,6 +192,9 @@ it('F05b: promotion gate refuses an old run after the required profile set expan
     if (sql.includes('from deployments')) return { id: 'dep', provider_deployment_id: '42', commit_sha: 'a'.repeat(40) };
     if (sql.includes('from runs')) return { id: 'old-desktop-run', suite_revision: old.revision, state: 'COMPLETED', gate: { eligible: true, reasons: [] } };
     throw new Error(`unhandled query ${sql}`);
+  }, async query(sql: string) {
+    if (sql.includes('from action_intents')) return { rows: [] }; // no effect obligations for this deployment
+    throw new Error(`unhandled query ${sql}`);
   } };
   const orch = new Orchestrator({ db: db as any, suiteBaseDir: ROOT, verifierFor: () => { throw new Error('not used'); }, publisherFor: () => { throw new Error('not used'); } });
   const g = await orch.gateStatus({ tenant_id: 'acme', project_id: 'shop', role: 'viewer', actor: 'audit' }, { project_id: 'shop', environment: 'preview', deployment_id: '42', commit_sha: 'a'.repeat(40) });

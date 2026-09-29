@@ -25,6 +25,10 @@ export const DeploymentEventBody = z
     commit_sha: z.string(),
     candidate_url: z.string().url().nullable().optional(),
     ci_run_id: z.union([z.string(), z.number()]).transform(String).optional(),
+    /** Lineage channel (e.g. `pr:123`); providers verify it against their own metadata. */
+    channel: z.string().regex(/^[\w.:/-]{1,100}$/).optional(),
+    /** Pipeline-supplied ordering (larger is newer), e.g. the CI run number. */
+    sequence: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -106,6 +110,8 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
         environment: body.environment,
         commit_sha: body.commit_sha,
         candidate_url: body.candidate_url ?? null,
+        ...(body.channel !== undefined ? { channel: body.channel } : {}),
+        ...(body.sequence !== undefined ? { sequence: body.sequence } : {}),
       },
       { provider: body.provider, delivery_id: deliveryId, payload_digest: digest(req.rawBody) },
     );
@@ -153,6 +159,11 @@ export async function buildApi(orch: Orchestrator, opts: ApiOptions = {}): Promi
   app.post<{ Params: { id: string } }>('/v1/runs/:id/retry', async (req) => {
     const { reason } = z.object({ reason: z.string().min(1) }).strict().parse(req.body ?? {});
     return { run: await orch.retryRun(await auth(req), req.params.id, reason) };
+  });
+  app.get<{ Params: { id: string } }>('/v1/runs/:id/obligations', async (req) => ({ obligations: await orch.obligations(await auth(req), req.params.id) }));
+  app.post<{ Params: { id: string } }>('/v1/intents/:id/adjudicate', async (req) => {
+    const a = z.object({ resolution: z.enum(['effect_absent', 'effect_present_accepted', 'effect_reverted']), note: z.string().min(1).max(2000) }).strict().parse(req.body ?? {});
+    return orch.adjudicateIntent(await auth(req), req.params.id, a);
   });
   app.get('/v1/gate', async (req) => {
     const q = z.object({ project_id: z.string(), environment: z.string(), deployment_id: z.string(), commit_sha: z.string() }).parse(req.query);

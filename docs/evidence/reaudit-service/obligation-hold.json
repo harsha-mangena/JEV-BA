@@ -1,0 +1,81 @@
+{
+  "run_id": "run_1xCKFFowZaiv",
+  "intent": "notes_crud.chromium_desktop.a1.c2977a.i5",
+  "transitions": [
+    {
+      "from_state": null,
+      "to_state": "PREPARED",
+      "fence": "1"
+    },
+    {
+      "from_state": "PREPARED",
+      "to_state": "DISPATCHING",
+      "fence": "1"
+    },
+    {
+      "from_state": "DISPATCHING",
+      "to_state": "RECONCILING",
+      "fence": "2"
+    },
+    {
+      "from_state": "RECONCILING",
+      "to_state": "NEEDS_REVIEW",
+      "fence": "2"
+    }
+  ],
+  "obligations_while_held": [
+    {
+      "intent_id": "notes_crud.chromium_desktop.a1.c2977a.i3",
+      "run_id": "run_1xCKFFowZaiv",
+      "run_attempt": 1,
+      "scenario_id": "notes_crud",
+      "execution_profile": "chromium_desktop",
+      "contract_intent": "notes.create",
+      "state": "NEEDS_REVIEW",
+      "detail": "notes.create is not recorded under an idempotency key by fixture-shop; inspect the application",
+      "live": false
+    },
+    {
+      "intent_id": "notes_crud.chromium_desktop.a1.c2977a.i5",
+      "run_id": "run_1xCKFFowZaiv",
+      "run_attempt": 1,
+      "scenario_id": "notes_crud",
+      "execution_profile": "chromium_desktop",
+      "contract_intent": "notes.delete",
+      "state": "NEEDS_REVIEW",
+      "detail": "notes.delete is not recorded under an idempotency key by fixture-shop; inspect the application",
+      "live": false
+    }
+  ],
+  "delete_requests_before_retry": 1,
+  "held_gate": {
+    "reasons": [
+      "notes_crud@chromium_desktop: NEEDS_REVIEW on a required check",
+      "effect obligation notes_crud.chromium_desktop.a1.c2977a.i3 (notes.create in notes_crud@chromium_desktop, run run_1xCKFFowZaiv attempt 1) is NEEDS_REVIEW with no adjudication",
+      "effect obligation notes_crud.chromium_desktop.a1.c2977a.i5 (notes.delete in notes_crud@chromium_desktop, run run_1xCKFFowZaiv attempt 1) is NEEDS_REVIEW with no adjudication"
+    ],
+    "eligible": false
+  },
+  "gate_while_open": {
+    "eligible": false,
+    "run_id": "run_1xCKFFowZaiv",
+    "reasons": [
+      "notes_crud@chromium_desktop: NEEDS_REVIEW on a required check",
+      "effect obligation notes_crud.chromium_desktop.a1.c2977a.i3 (notes.create in notes_crud@chromium_desktop, run run_1xCKFFowZaiv attempt 1) is NEEDS_REVIEW with no adjudication",
+      "effect obligation notes_crud.chromium_desktop.a1.c2977a.i5 (notes.delete in notes_crud@chromium_desktop, run run_1xCKFFowZaiv attempt 1) is NEEDS_REVIEW with no adjudication"
+    ]
+  },
+  "adjudication": {
+    "intent_id": "notes_crud.chromium_desktop.a1.c2977a.i5",
+    "adjudication": {
+      "resolution": "effect_present_accepted",
+      "by": "token:admin",
+      "note": "test-owned note in the dead worker fixture; fixture swept",
+      "at": "2026-09-28T20:15:47.424Z"
+    }
+  },
+  "gate_after_retry": {
+    "reasons": [],
+    "eligible": true
+  }
+}

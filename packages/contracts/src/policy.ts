@@ -69,6 +69,13 @@ export const ProjectPolicy = z
      * unknown effect and is denied for every operation and every driver.
      */
     control_bindings: z.array(ControlBindingSpec).default([]),
+    /**
+     * Pixel privacy: CSS selectors of regions that can show sensitive data the
+     * runner cannot detect as text (e.g. server-rendered images). They are
+     * masked in every captured image, in addition to registered secrets and
+     * uninspectable content.
+     */
+    privacy: z.object({ mask_selectors: z.array(z.string().min(1)).default([]) }).strict().default({}),
   })
   .strict()
   .superRefine((p, ctx) => {

@@ -173,6 +173,21 @@ describe('gate ordering', () => {
     expect(forbidden.outcome).toBe('DENY');
   });
 
+  it('stops acting the moment its qualification expires, even mid-run (re-audit R5)', async () => {
+    let now = new Date('2026-10-19T23:59:59Z');
+    const calibrated = { version_id: 'cal_1', decision_config_digest: 'cfg', threshold: 0.9, score: () => 0.95, supported: () => true, authorized_until: '2026-10-20T00:00:00.000Z', clock: () => now };
+    const config = { ...HEURISTIC_GATE_V0, calibrated };
+    const model = { requested: 'jev-latest', resolved: 'jev-1.13.0' };
+    expect(await evaluateGate(input({ config, decision_config_digest: 'cfg', model }))).toMatchObject({ outcome: 'ACT' });
+    now = new Date('2026-10-20T00:00:00Z');
+    const expired = await evaluateGate(input({ config, decision_config_digest: 'cfg', model }));
+    expect(expired.outcome).not.toBe('ACT');
+    expect(expired.reason_codes).toEqual(['qualification_expired']);
+    // A grant with no valid expiry authorizes nothing.
+    const none = await evaluateGate(input({ config: { ...config, calibrated: { ...calibrated, authorized_until: null } }, decision_config_digest: 'cfg', model }));
+    expect(none.reason_codes).toEqual(['qualification_expired']);
+  });
+
   it('enforces autonomy modes (audit F04)', async () => {
     const confident = input();
     expect((await evaluateGate(confident)).outcome).toBe('ACT');

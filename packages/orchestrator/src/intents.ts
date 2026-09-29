@@ -1,6 +1,7 @@
 import type { Db } from '@qa/db';
+import type pg from 'pg';
 import type { EffectReceipt } from '@qa/oracles';
-import { FenceLost, IllegalTransition, INTENT_TRANSITIONS, UNRESOLVED, type IntentRecord, type IntentState, type IntentStore } from '@qa/worker';
+import { FenceLost, IllegalTransition, INTENT_TRANSITIONS, UNRESOLVED, type Adjudication, type IntentRecord, type IntentState, type IntentStore, type NewIntent } from '@qa/worker';
 
 export interface IntentScope {
   tenant_id: string;
@@ -9,13 +10,58 @@ export interface IntentScope {
   shard: number;
   job_id: string;
   fence: number;
+  /** The cases this job executes: intents any earlier attempt left for them are this job's to recover. */
+  cases?: Array<{ scenario_id: string; execution_profile: string }>;
 }
+
+/** The job that recorded the intent still holds its lease under the same fence (the effect may be in progress). */
+const LIVE = `exists (select 1 from jobs j where j.id = ai.job_id and j.fence = ai.fence and j.state = 'leased' and j.lease_expires_at > now())`;
+/** Recovery must act: unresolved lifecycle, or a mutation acknowledged but never confirmed or settled. */
+const NEEDS_RECOVERY = `(ai.state = any($UNRESOLVED) or (ai.state = 'ACKNOWLEDGED' and ai.effect <> 'none'))`;
+/** Holds the run: needs recovery, or waits for review with no adjudication. */
+const OUTSTANDING = `(${NEEDS_RECOVERY} or (ai.state = 'NEEDS_REVIEW' and ai.adjudication is null))`;
+
+export interface Obligation {
+  intent_id: string;
+  run_id: string;
+  run_attempt: number;
+  scenario_id: string;
+  execution_profile: string;
+  contract_intent: string | null;
+  state: IntentState;
+  detail: string | null;
+  /** Recorded by a job that is still leased: the effect may still be in progress. */
+  live: boolean;
+}
+
+/**
+ * Every effect obligation still open for a deployment (all runs, attempts,
+ * fences and shards). With `includeLive: false`, intents of jobs that still
+ * hold their lease are left out — they are in progress, not abandoned — but a
+ * review is never left out.
+ */
+export async function outstandingObligations(q: { query: pg.ClientBase['query'] } | Db, deploymentId: string, o: { includeLive: boolean }): Promise<Obligation[]> {
+  const rows = (
+    await (q as pg.ClientBase).query<Obligation>(
+      `select ai.intent_id, ai.run_id, ai.run_attempt, ai.scenario_id, ai.execution_profile, ai.contract_intent, ai.state, ai.detail, ${LIVE} as live
+       from action_intents ai where ai.run_id in (select id from runs where deployment_id = $1) and ${OUTSTANDING.replace('$UNRESOLVED', '$2')}
+       order by ai.created_at`,
+      [deploymentId, UNRESOLVED],
+    )
+  ).rows;
+  return o.includeLive ? rows : rows.filter((r) => !r.live || r.state === 'NEEDS_REVIEW');
+}
+
+export const OBLIGATION_PREFIX = 'effect obligation ';
+export const describeObligation = (x: Obligation) =>
+  `${OBLIGATION_PREFIX}${x.intent_id} (${x.contract_intent ?? 'effect'} in ${x.scenario_id}@${x.execution_profile}, run ${x.run_id} attempt ${x.run_attempt}) is ${x.state}${x.live ? ' and still in progress' : x.state === 'NEEDS_REVIEW' ? ' with no adjudication' : ''}`;
 
 /** Holds only while the job is still leased under this exact fence and the lease has not expired. */
 const FENCED = `exists (select 1 from jobs where id = $FENCE_JOB and fence = $FENCE and state = 'leased' and lease_expires_at > now())`;
 const fenced = (sql: string, jobParam: number, fenceParam: number) => sql.replace('$FENCE_JOB', `$${jobParam}`).replace('$FENCE', `$${fenceParam}`);
 
 interface Row {
+  adjudication: Adjudication | null;
   intent_id: string;
   attempt_id: string;
   scenario_id: string;
@@ -41,7 +87,7 @@ export class PgIntentStore implements IntentStore {
     private readonly scope: IntentScope,
   ) {}
 
-  async prepare(r: Omit<IntentRecord, 'state' | 'detail' | 'receipts'>): Promise<void> {
+  async prepare(r: NewIntent): Promise<void> {
     const s = this.scope;
     await this.db.tx(async (c) => {
       const ins = await c.query(
@@ -73,9 +119,31 @@ export class PgIntentStore implements IntentStore {
     });
   }
 
+  /**
+   * What this job must recover before it runs: intents an earlier lease of
+   * this shard left behind, plus anything any earlier attempt of the run left
+   * for this job's cases — never an intent whose job still holds its lease.
+   */
   async unresolved(): Promise<IntentRecord[]> {
+    return this.scoped(NEEDS_RECOVERY.replace('$UNRESOLVED', '$4'));
+  }
+
+  /** Obligations still open for this job's work, from any fence or attempt (reviews included). */
+  async outstanding(): Promise<IntentRecord[]> {
+    return this.scoped(OUTSTANDING.replace('$UNRESOLVED', '$4'));
+  }
+
+  private async scoped(condition: string): Promise<IntentRecord[]> {
     const s = this.scope;
-    const rows = (await this.db.query<Row>(`select * from action_intents where run_id=$1 and run_attempt=$2 and shard=$3 and fence < $4 and state = any($5) order by created_at`, [s.run_id, s.run_attempt, s.shard, s.fence, UNRESOLVED])).rows;
+    const rows = (
+      await this.db.query<Row>(
+        `select ai.* from action_intents ai
+         where ai.run_id = $1 and not (ai.job_id = $2 and ai.fence = $3) and not ${LIVE} and ${condition}
+           and ((ai.run_attempt = $5 and ai.shard = $6) or (ai.scenario_id, ai.execution_profile) in (select x->>'scenario_id', x->>'execution_profile' from jsonb_array_elements($7::jsonb) x))
+         order by ai.created_at`,
+        [s.run_id, s.job_id, s.fence, UNRESOLVED, s.run_attempt, s.shard, JSON.stringify(s.cases ?? [])],
+      )
+    ).rows;
     return Promise.all(rows.map((r) => this.hydrate(r)));
   }
 
@@ -100,6 +168,7 @@ export class PgIntentStore implements IntentStore {
       detail: r.detail,
       receipts,
       data: r.data,
+      adjudication: r.adjudication,
     };
   }
 }

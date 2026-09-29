@@ -12,6 +12,13 @@ export const EnvironmentConfig = z
     required_check: z.boolean().default(true),
     /** Production is read-only: no fixture provisioning and no mutations (Phase 9 capability profile). */
     read_only: z.boolean().default(false),
+    /**
+     * Candidate lineage. `single`: every deployment to the environment is one
+     * lineage (a newer one supersedes an older one). `per_channel`: each
+     * verified provider channel (e.g. a pull-request preview) is its own
+     * lineage; a deployment whose channel cannot be verified is refused.
+     */
+    lineage: z.enum(['single', 'per_channel']).default('single'),
   })
   .strict();
 export type EnvironmentConfig = z.output<typeof EnvironmentConfig>;

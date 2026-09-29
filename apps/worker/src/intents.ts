@@ -3,15 +3,23 @@ import type { ApplicationAdapter, EffectReceipt } from '@qa/oracles';
 /**
  * Durable action-intent lifecycle (audit F09).
  *
- *   PREPARED ──► DISPATCHING ──► ACKNOWLEDGED ──► EFFECT_CONFIRMED
+ *   PREPARED ──► DISPATCHING ──► ACKNOWLEDGED ──► EFFECT_CONFIRMED | RECONCILED | SETTLED
  *      │              │                │
- *      ▼              ├──► NOT_DISPATCHED
+ *      ▼              ├──► NOT_DISPATCHED   └──► RECONCILING (recovery)
  *   NOT_DISPATCHED    └──► EFFECT_UNKNOWN ──► RECONCILING ──► RECONCILED | NEEDS_REVIEW
  *
  * PREPARED is written before the browser receives any input; DISPATCHING is
  * written immediately before input is sent. A worker that dies leaves the
  * record in one of those states, and recovery can tell "never sent" (PREPARED)
  * from "possibly sent" (DISPATCHING) without guessing.
+ *
+ * An acknowledged mutation is not resolved by the acknowledgement alone: a
+ * keyed one is confirmed (EFFECT_CONFIRMED) or proven absent (RECONCILED) from
+ * the application; an unkeyed one is SETTLED only when its owning attempt
+ * finishes under the same live lease. Anything a dead worker left acknowledged
+ * is reconciled on recovery. NEEDS_REVIEW is an obligation that stays
+ * outstanding — surfaced by every later recovery pass and holding the release
+ * gate — until an authorized adjudication resolves it.
  */
 export type IntentState =
   | 'PREPARED'
@@ -22,22 +30,41 @@ export type IntentState =
   | 'EFFECT_UNKNOWN'
   | 'RECONCILING'
   | 'RECONCILED'
+  | 'SETTLED'
   | 'NEEDS_REVIEW';
 
 export const INTENT_TRANSITIONS: Record<IntentState, IntentState[]> = {
   PREPARED: ['DISPATCHING', 'NOT_DISPATCHED'],
   DISPATCHING: ['ACKNOWLEDGED', 'NOT_DISPATCHED', 'EFFECT_UNKNOWN', 'RECONCILING'],
-  ACKNOWLEDGED: ['EFFECT_CONFIRMED', 'EFFECT_UNKNOWN', 'NEEDS_REVIEW'],
+  ACKNOWLEDGED: ['EFFECT_CONFIRMED', 'RECONCILED', 'SETTLED', 'EFFECT_UNKNOWN', 'RECONCILING', 'NEEDS_REVIEW'],
   EFFECT_UNKNOWN: ['RECONCILING'],
   RECONCILING: ['RECONCILED', 'NEEDS_REVIEW'],
   NOT_DISPATCHED: [],
   EFFECT_CONFIRMED: [],
   RECONCILED: [],
+  SETTLED: [],
   NEEDS_REVIEW: [],
 };
 
 /** States a recovering worker must resolve before it may run the same work again. */
 export const UNRESOLVED: readonly IntentState[] = ['PREPARED', 'DISPATCHING', 'EFFECT_UNKNOWN', 'RECONCILING'];
+
+/** Whether recovery must act on this record (an acknowledged read has nothing left to prove). */
+export const needsRecovery = (r: Pick<IntentRecord, 'state' | 'effect'>): boolean => UNRESOLVED.includes(r.state) || (r.state === 'ACKNOWLEDGED' && r.effect !== 'none');
+
+/** Whether this record still holds its run: unresolved, or waiting for review without an adjudication. */
+export const isOutstanding = (r: Pick<IntentRecord, 'state' | 'effect' | 'adjudication'>): boolean => needsRecovery(r) || (r.state === 'NEEDS_REVIEW' && !r.adjudication);
+
+export type AdjudicationResolution = 'effect_absent' | 'effect_present_accepted' | 'effect_reverted';
+export const ADJUDICATION_RESOLUTIONS: readonly AdjudicationResolution[] = ['effect_absent', 'effect_present_accepted', 'effect_reverted'];
+
+/** An explicit, attributed human decision about an effect the system could not verify. */
+export interface Adjudication {
+  resolution: AdjudicationResolution;
+  by: string;
+  note: string;
+  at?: string;
+}
 
 export interface IntentRecord {
   intent_id: string;
@@ -54,7 +81,10 @@ export interface IntentRecord {
   detail: string | null;
   receipts: EffectReceipt[];
   data: Record<string, unknown>;
+  adjudication: Adjudication | null;
 }
+
+export type NewIntent = Omit<IntentRecord, 'state' | 'detail' | 'receipts' | 'adjudication'>;
 
 export class IllegalTransition extends Error {}
 /** The caller no longer holds the lease/fence for this work; nothing was written. */
@@ -62,12 +92,23 @@ export class FenceLost extends Error {}
 
 export interface IntentStore {
   /** Durably record a new intent in PREPARED. Must complete before any input is dispatched. */
-  prepare(r: Omit<IntentRecord, 'state' | 'detail' | 'receipts'>): Promise<void>;
+  prepare(r: NewIntent): Promise<void>;
   /** Move an intent to `to`; rejects illegal transitions and lost fences. */
   transition(intentId: string, to: IntentState, detail?: string | null, receipts?: EffectReceipt[]): Promise<void>;
-  /** Intents left unresolved by earlier executions of the same unit of work. */
+  /** Intents earlier executions of the same unit of work left for recovery to act on (see `needsRecovery`). */
   unresolved(): Promise<IntentRecord[]>;
+  /** Every obligation still holding this unit of work, including reviews from any earlier fence or attempt. */
+  outstanding(): Promise<IntentRecord[]>;
   get(intentId: string): Promise<IntentRecord | undefined>;
+}
+
+export function validateAdjudication(r: IntentRecord | undefined, intentId: string, a: Adjudication): void {
+  if (!r) throw new IllegalTransition(`unknown intent ${intentId}`);
+  if (!a.by?.trim()) throw new IllegalTransition('an adjudication must name the actor');
+  if (!ADJUDICATION_RESOLUTIONS.includes(a.resolution)) throw new IllegalTransition(`unknown resolution ${String(a.resolution)}`);
+  if (!a.note?.trim()) throw new IllegalTransition('an adjudication must record what was checked');
+  if (r.state !== 'NEEDS_REVIEW') throw new IllegalTransition(`${intentId} is ${r.state}, not awaiting review`);
+  if (r.adjudication) throw new IllegalTransition(`${intentId} was already adjudicated`);
 }
 
 /** In-process store (CLI and tests); the service uses the PostgreSQL store with fencing. */
@@ -75,9 +116,9 @@ export class MemoryIntentStore implements IntentStore {
   readonly records = new Map<string, IntentRecord>();
   readonly transitions: Array<{ intent_id: string; from: IntentState; to: IntentState; detail: string | null; at: string }> = [];
 
-  async prepare(r: Omit<IntentRecord, 'state' | 'detail' | 'receipts'>): Promise<void> {
+  async prepare(r: NewIntent): Promise<void> {
     if (this.records.has(r.intent_id)) throw new IllegalTransition(`intent ${r.intent_id} already exists`);
-    this.records.set(r.intent_id, { ...r, state: 'PREPARED', detail: null, receipts: [] });
+    this.records.set(r.intent_id, { ...r, state: 'PREPARED', detail: null, receipts: [], adjudication: null });
     this.transitions.push({ intent_id: r.intent_id, from: 'PREPARED', to: 'PREPARED', detail: null, at: new Date().toISOString() });
   }
 
@@ -92,7 +133,17 @@ export class MemoryIntentStore implements IntentStore {
   }
 
   async unresolved(): Promise<IntentRecord[]> {
-    return [...this.records.values()].filter((r) => UNRESOLVED.includes(r.state));
+    return [...this.records.values()].filter(needsRecovery);
+  }
+
+  async outstanding(): Promise<IntentRecord[]> {
+    return [...this.records.values()].filter(isOutstanding);
+  }
+
+  async adjudicate(intentId: string, a: Adjudication): Promise<void> {
+    const r = this.records.get(intentId);
+    validateAdjudication(r, intentId, a);
+    r!.adjudication = { ...a, at: new Date().toISOString() };
   }
 
   async get(intentId: string): Promise<IntentRecord | undefined> {
@@ -150,7 +201,10 @@ export async function reconcileIntent(r: IntentRecord, adapter: ApplicationAdapt
 /**
  * Resolve every intent an earlier execution left unresolved, before the same
  * work runs again. PREPARED was never dispatched; anything that may have been
- * dispatched is reconciled against the application.
+ * dispatched — including a mutation acknowledged but never confirmed — is
+ * reconciled against the application. Returns the recovered records plus
+ * every review obligation still outstanding from earlier passes, so a caller
+ * can never mistake "nothing left to recover" for "nothing uncertain".
  */
 export async function recoverIntents(store: IntentStore, adapter: ApplicationAdapter, o: ReconcileOptions = {}): Promise<IntentRecord[]> {
   const out: IntentRecord[] = [];
@@ -158,11 +212,13 @@ export async function recoverIntents(store: IntentStore, adapter: ApplicationAda
     if (r.state === 'PREPARED') {
       await store.transition(r.intent_id, 'NOT_DISPATCHED', 'recovered: input was never dispatched');
     } else {
-      if (r.state !== 'RECONCILING') await store.transition(r.intent_id, 'RECONCILING', 'recovered after worker loss');
+      if (r.state !== 'RECONCILING') await store.transition(r.intent_id, 'RECONCILING', r.state === 'ACKNOWLEDGED' ? 'recovered after worker loss: acknowledged but never confirmed' : 'recovered after worker loss');
       const rec = await reconcileIntent(r, adapter, o).catch((e: Error) => ({ state: 'NEEDS_REVIEW' as const, receipts: [], detail: `effect lookup failed: ${e.message}` }));
       await store.transition(r.intent_id, rec.state, rec.detail, rec.receipts);
     }
     out.push((await store.get(r.intent_id))!);
   }
+  const seen = new Set(out.map((r) => r.intent_id));
+  for (const r of await store.outstanding()) if (!seen.has(r.intent_id)) out.push(r);
   return out;
 }

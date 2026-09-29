@@ -18,11 +18,15 @@ using the states `IMPLEMENTATION_PENDING`, `IMPLEMENTED_OFFLINE_VERIFIED`,
 independent audit (`docs/evidence/audit-2026-09-27/`) found gaps F01–F10 in the
 first implementation; its 13 probes run as the mandatory `audit` lane
 (`tests/audit/`) and now pass. The closure report is
-[`docs/closure-report.md`](docs/closure-report.md).
+[`docs/closure-report.md`](docs/closure-report.md). A re-audit of the merged
+result found five residual issues (R1–R5: effect obligations, execution
+contract, deployment lineage, pixel privacy, qualification freshness); they are
+fixed, their probes run in the same lane, and the response is
+[`docs/reaudit-closure.md`](docs/reaudit-closure.md).
 
 | Item | State |
 | --- | --- |
-| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency | `IMPLEMENTED_OFFLINE_VERIFIED` |
+| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency; re-audit R1–R5 | `IMPLEMENTED_OFFLINE_VERIFIED` |
 | F01 TypeSafe/Jev contract, F07 vision S2 | `LIVE_VERIFICATION_REQUIRED` (provider credentials) |
 | Calibrated autonomy for any profile | `BLOCKED` (no representative labelled data or live record; workers run calibrated exploration in shadow mode) |
 
