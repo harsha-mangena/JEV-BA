@@ -1,12 +1,12 @@
 {
   "lane": "service",
   "status": "PASSED",
-  "code_sha": "f203cbfe6dee030cec0acf7b3615aeb2a1edc5f4",
+  "code_sha": "9d10ad5393f1f645d40c953a232ade21f8f0fbf5",
   "dirty": false,
   "command": "npx vitest run --config vitest.service.config.ts --reporter=default --reporter=json --outputFile.json=evidence/lanes/.service.vitest.json",
   "exit_code": 0,
-  "started_at": "2026-09-28T20:34:13.685Z",
-  "finished_at": "2026-09-28T20:35:03.751Z",
+  "started_at": "2026-09-29T18:19:25.315Z",
+  "finished_at": "2026-09-29T18:20:17.953Z",
   "environment": {
     "node": "v22.22.2",
     "platform": "linux-x64",
@@ -25,11 +25,11 @@
     "postgres"
   ],
   "counts": {
-    "total": 48,
-    "passed": 48,
+    "total": 49,
+    "passed": 49,
     "failed": 0,
     "skipped": 0
   },
   "skipped": [],
-  "digest": "7741fefb2851b3da1ed7412a87c513902bb23178466df8d06a12c7894902c1d0"
+  "digest": "1b8f15a152576a10ed303d16644d529c3da20bdaad7d646512ccabbd63fa0ba3"
 }

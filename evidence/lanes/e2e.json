@@ -1,12 +1,12 @@
 {
   "lane": "e2e",
   "status": "PASSED",
-  "code_sha": "f203cbfe6dee030cec0acf7b3615aeb2a1edc5f4",
+  "code_sha": "9d10ad5393f1f645d40c953a232ade21f8f0fbf5",
   "dirty": false,
   "command": "npx vitest run --config vitest.e2e.config.ts --reporter=default --reporter=json --outputFile.json=evidence/lanes/.e2e.vitest.json",
   "exit_code": 0,
-  "started_at": "2026-09-28T20:33:06.411Z",
-  "finished_at": "2026-09-28T20:34:13.240Z",
+  "started_at": "2026-09-29T18:17:43.829Z",
+  "finished_at": "2026-09-29T18:19:24.778Z",
   "environment": {
     "node": "v22.22.2",
     "platform": "linux-x64",
@@ -24,11 +24,11 @@
     "browser"
   ],
   "counts": {
-    "total": 79,
-    "passed": 79,
+    "total": 88,
+    "passed": 88,
     "failed": 0,
     "skipped": 0
   },
   "skipped": [],
-  "digest": "a433aa15a912588aa1a122f5b34702729de7abd21e2e15e45feefa71afae8171"
+  "digest": "f9f6d8cb49482bd9246a9d5eb65f6c9d276c60fb7a4c16ce24d719f1e0aaacb3"
 }

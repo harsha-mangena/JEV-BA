@@ -1,12 +1,12 @@
 {
   "lane": "static",
   "status": "PASSED",
-  "code_sha": "f203cbfe6dee030cec0acf7b3615aeb2a1edc5f4",
+  "code_sha": "9d10ad5393f1f645d40c953a232ade21f8f0fbf5",
   "dirty": false,
   "command": "npx tsc -p tsconfig.json --noEmit",
   "exit_code": 0,
-  "started_at": "2026-09-28T20:32:51.051Z",
-  "finished_at": "2026-09-28T20:32:58.233Z",
+  "started_at": "2026-09-29T18:17:26.660Z",
+  "finished_at": "2026-09-29T18:17:34.946Z",
   "environment": {
     "node": "v22.22.2",
     "platform": "linux-x64",
@@ -23,5 +23,5 @@
   "requires": [],
   "counts": null,
   "skipped": [],
-  "digest": "1fa1507f35797e81b2ecd2b2196c6616c213e16a02226adc9a2594db3f2bfb0d"
+  "digest": "3793b6430d305b85bc76f831039046c911c36e793acdb0d688d7672ba41ad0c0"
 }

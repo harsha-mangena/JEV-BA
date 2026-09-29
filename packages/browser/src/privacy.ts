@@ -36,6 +36,8 @@ export const MASK_COLOR = '#FF00FF';
 export const DEFAULT_SENSITIVE_SELECTORS = ['input[type=password]', 'canvas', 'video', 'embed', 'object'];
 /** More overlay rectangles than this for one image: masking cannot be established reliably, so withhold. */
 const MAX_OVERLAYS = 2_000;
+/** CSS pixels added around every overlay rectangle (glyph overhang and anti-aliasing reach past line boxes). */
+const OVERLAY_PAD = 3;
 
 export interface PrivacyOptions {
   /** Registered secret values (fixture secrets, session cookies, …). */
@@ -152,7 +154,7 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
   for (const frame of page.frames()) {
     const r = await frame
       .evaluate(
-        ({ attr, overlayAttr, boxAttr, color, max }) => {
+        ({ attr, overlayAttr, boxAttr, color, max, pad }) => {
           const BOXED = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'IMG', 'CANVAS', 'VIDEO', 'AUDIO', 'IFRAME', 'FRAME', 'EMBED', 'OBJECT', 'SVG', 'svg', 'BR', 'HR', 'PICTURE', 'METER', 'PROGRESS']);
           const roots: Array<Document | ShadowRoot> = [document];
           for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
@@ -187,13 +189,13 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
               if (++n > max) return { n, over: true };
               const o = document.createElement('div');
               o.setAttribute(overlayAttr, '');
-              o.style.cssText = `all:initial;position:absolute;display:block;box-sizing:border-box;margin:0;border:0;padding:0;left:${r.left - origin.x}px;top:${r.top - origin.y}px;width:${r.width}px;height:${r.height}px;background:${color};opacity:1;visibility:visible;z-index:2147483647;pointer-events:none;transform:none`;
+              o.style.cssText = `all:initial;position:absolute;display:block;box-sizing:border-box;margin:0;border:0;padding:0;left:${r.left - origin.x - pad}px;top:${r.top - origin.y - pad}px;width:${r.width + 2 * pad}px;height:${r.height + 2 * pad}px;background:${color};opacity:1;visibility:visible;z-index:2147483647;pointer-events:none;transform:none`;
               e.appendChild(o);
             }
           }
           return { n, over: false };
         },
-        { attr: SENSITIVE_ATTR, overlayAttr: OVERLAY_ATTR, boxAttr: BOX_ATTR, color: MASK_COLOR, max: MAX_OVERLAYS },
+        { attr: SENSITIVE_ATTR, overlayAttr: OVERLAY_ATTR, boxAttr: BOX_ATTR, color: MASK_COLOR, max: MAX_OVERLAYS, pad: OVERLAY_PAD },
       )
       .catch((e: Error) => e);
     if (r instanceof Error) {

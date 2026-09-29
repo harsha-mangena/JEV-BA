@@ -243,7 +243,8 @@ describe('pixel privacy (re-audit R4)', () => {
         a.defects.add('header_restyled');
         const second = await runSuite({ scenarios: [cart], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login', quality: { baselines: store } });
         const images = second.report.cases[0]!.artifacts.filter((x) => x.kind === 'visual_candidate' || x.kind === 'visual_diff');
-        expect(images.map((x) => x.kind).sort()).toEqual(['visual_candidate', 'visual_diff']);
+        const vb = second.report.cases[0]!.assertions.find((x) => x.type === 'visual_match')!;
+        expect(images.map((x) => x.kind).sort(), vb.message ?? vb.status).toEqual(['visual_candidate', 'visual_diff']);
         for (const img of images) expect(band(await readFile(join(second.runDir, img.path))), img.path).toBe(0);
         a.defects.delete('header_restyled');
 

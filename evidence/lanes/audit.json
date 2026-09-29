@@ -1,12 +1,12 @@
 {
   "lane": "audit",
   "status": "PASSED",
-  "code_sha": "f203cbfe6dee030cec0acf7b3615aeb2a1edc5f4",
+  "code_sha": "9d10ad5393f1f645d40c953a232ade21f8f0fbf5",
   "dirty": false,
   "command": "npx vitest run --config vitest.audit.config.ts --reporter=default --reporter=json --outputFile.json=evidence/lanes/.audit.vitest.json",
   "exit_code": 0,
-  "started_at": "2026-09-28T20:35:04.241Z",
-  "finished_at": "2026-09-28T20:35:11.477Z",
+  "started_at": "2026-09-29T18:20:18.378Z",
+  "finished_at": "2026-09-29T18:20:26.157Z",
   "environment": {
     "node": "v22.22.2",
     "platform": "linux-x64",
@@ -24,11 +24,11 @@
     "browser"
   ],
   "counts": {
-    "total": 20,
-    "passed": 20,
+    "total": 26,
+    "passed": 26,
     "failed": 0,
     "skipped": 0
   },
   "skipped": [],
-  "digest": "5ed183659d4f8590032594438bb7570daebe1b7cc56acc4769752dc363ab0582"
+  "digest": "4c602b2e3d405d8ff396bc023c686bbb68ee861c7ab2e688b08c0316a8784131"
 }
