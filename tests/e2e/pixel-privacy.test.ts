@@ -5,6 +5,9 @@ import type { Browser, Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { launchBrowser, MASK_COLOR, safeScreenshot } from '@qa/browser';
+import { approveFromEvidence, FsBaselineStore, type BaselineKey } from '@qa/quality';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { readZip, sanitizeTraceArchive, writeZip } from '@qa/evidence';
 import { KeywordProvider } from '@qa/s1';
 import type { S2EscalationInput } from '@qa/s2';
@@ -173,5 +176,90 @@ describe('pixel privacy (re-audit R4)', () => {
     } finally {
       await a.close();
     }
+  });
+
+  describe('painted extent and generated content (review-3 N1)', () => {
+    /** Glyph-dark pixels (not background, not mask) inside a box. */
+    function dark(png: Buffer, box: { x: number; y: number; width: number; height: number }): number {
+      const img = PNG.sync.read(png);
+      let n = 0;
+      for (let y = Math.max(0, Math.ceil(box.y)); y < Math.min(img.height, Math.floor(box.y + box.height)); y++) {
+        for (let x = Math.max(0, Math.ceil(box.x)); x < Math.min(img.width, Math.floor(box.x + box.width)); x++) {
+          const i = (y * img.width + x) * 4;
+          if (img.data[i]! < 110 && img.data[i + 1]! < 110 && img.data[i + 2]! < 110) n++;
+        }
+      }
+      return n;
+    }
+    const cases: Array<[string, string]> = [
+      ['::after literal content', `<style>#x::after{content:"code ${TOKEN}"}</style><p id="x" style="margin:20px">label</p>`],
+      ['a positioned descendant far outside its parent', `<div id="x" style="position:relative;margin:20px;width:60px;height:24px"><span style="position:absolute;left:400px;top:0;white-space:nowrap">${TOKEN}</span></div>`],
+      ['a rotated ancestor', `<div style="transform:rotate(12deg);transform-origin:0 0;margin:40px"><p id="x" style="white-space:nowrap">${TOKEN}</p></div>`],
+      ['a far text-shadow (paint the masks cannot know about)', `<p id="x" style="margin:20px;text-shadow:420px 0 0 #000;white-space:nowrap">${TOKEN}</p>`],
+    ];
+    it.each(cases)('%s is masked or the image is withheld; nothing sensitive is visible in an accepted image', async (_name, html) => {
+      const page = await browser.newPage({ viewport: { width: 900, height: 300 } });
+      try {
+        await page.setContent(`<!doctype html><body style="margin:0;font:20px sans-serif;background:#fff;color:#000"><h1 id="ok" style="margin:8px;font-size:18px">Order summary</h1>${html}</body>`);
+        const raw = await page.screenshot({ type: 'png' });
+        const ok = (await page.locator('#ok').boundingBox())!;
+        const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+        if (shot.ok) {
+          // Everything except the positive-control heading: no glyph pixels at all once masked.
+          expect(dark(shot.png, { x: 0, y: ok.y + ok.height + 2, width: 900, height: 300 })).toBe(0);
+          expect(dark(shot.png, ok)).toBeGreaterThan(0);
+        } else expect(shot.withheld).toMatch(/painted outside their masks|could not|appeared/);
+        // Control: the leak is really there without masking.
+        expect(dark(raw, { x: 0, y: ok.y + ok.height + 2, width: 900, height: 300 })).toBeGreaterThan(0);
+      } finally {
+        await page.close();
+      }
+    });
+
+    it.each([['generated'], ['overflow']] as const)('a fixture secret shown as %s content is masked in evidence, visual candidates and diffs, and the S2 image', async (mode) => {
+      const band = (png: Buffer) => {
+        const { width, height } = PNG.sync.read(png);
+        return dark(png, { x: width - 360, y: height - 48, width: 360, height: 48 });
+      };
+      const { app: a, fixtures } = await app(['note_delete_ignored']);
+      a.control.credentialEcho = mode;
+      try {
+        // Evidence screenshots (milestones and failure).
+        const r1 = await runSuite({ scenarios: [await scenario('notes_crud')], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login' });
+        const shots = r1.report.cases[0]!.artifacts.filter((x) => x.kind === 'screenshot');
+        const events = await readFile(join(r1.runDir, r1.report.cases[0]!.artifacts.find((x) => x.kind === 'events')!.path), 'utf8');
+        expect(shots.length + (events.match(/withheld/g)?.length ?? 0)).toBeGreaterThanOrEqual(2);
+        for (const s of shots) expect(band(await readFile(join(r1.runDir, s.path))), s.path).toBe(0);
+
+        // Visual checkpoint candidate, then (after approval) a diff against a restyled header.
+        const store = new FsBaselineStore(await mkdtemp(join(tmpdir(), 'qa-priv-bl-')));
+        const cart = await scenario('cart_quality');
+        const first = await runSuite({ scenarios: [cart], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login', quality: { baselines: store } });
+        const va = first.report.cases[0]!.assertions.find((x) => x.type === 'visual_match')!;
+        expect(va.status, va.message ?? '').toBe('needs_review');
+        const [, path, sha] = /artifact: (\S+)#sha256=([0-9a-f]{64})/.exec(va.message!)!;
+        expect(band(await readFile(join(first.runDir, path!)))).toBe(0);
+        await approveFromEvidence(store, (va.expected as { key: BaselineKey }).key, join(first.runDir, path!), sha!, { approved_by: 'reviewer@example.test', commit_sha: 'a'.repeat(40), source: 'test', expected_version: 0 });
+        a.defects.add('header_restyled');
+        const second = await runSuite({ scenarios: [cart], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login', quality: { baselines: store } });
+        const images = second.report.cases[0]!.artifacts.filter((x) => x.kind === 'visual_candidate' || x.kind === 'visual_diff');
+        const vb = second.report.cases[0]!.assertions.find((x) => x.type === 'visual_match')!;
+        expect(images.map((x) => x.kind).sort(), vb.message ?? vb.status).toEqual(['visual_candidate', 'visual_diff']);
+        for (const img of images) expect(band(await readFile(join(second.runDir, img.path))), img.path).toBe(0);
+        a.defects.delete('header_restyled');
+
+        // The image a vision-capable System Two receives.
+        let s2: S2EscalationInput | undefined;
+        const uncertain = new KeywordProvider((_req, q) => (q.id === 'op' ? ['CLICK'] : []));
+        await runSuite({
+          scenarios: [await scenario('checkout_exploration', 'exploration')], policy, baseUrl: a.url, environment: 'local', fixtures, outDir: await outDir(), browser, profiles: ['chromium_desktop'], signedOutPath: '/login',
+          exploration: { s1: uncertain, model: 'offline', s2: { id: 'privacy-s2', supportsImages: true, async propose(input) { s2 ??= input; return { kind: 'ABSTAIN', reason: 'probe complete', evidence_refs: [] }; } } },
+        });
+        expect(s2).toBeDefined();
+        if (s2!.screenshot_png) expect(band(s2!.screenshot_png)).toBe(0);
+      } finally {
+        await a.close();
+      }
+    });
   });
 });

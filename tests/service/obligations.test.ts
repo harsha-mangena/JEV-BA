@@ -23,8 +23,8 @@ afterEach(async () => {
   while (open.length) await open.pop()!.close();
 });
 
-async function setup(scenarios: string[]): Promise<Harness> {
-  const config = projectConfig({ suite: { specs_dir: 'specs', policy_file: 'specs/policies/fixture-shop.yaml', fixture_catalog: 'specs/fixtures.yaml', profiles: ['chromium_desktop'], scenarios, shards: 1, concurrency: 1, signed_out_path: '/login' } });
+async function setup(scenarios: string[], retries = 0): Promise<Harness> {
+  const config = projectConfig({ suite: { specs_dir: 'specs', policy_file: 'specs/policies/fixture-shop.yaml', fixture_catalog: 'specs/fixtures.yaml', profiles: ['chromium_desktop'], scenarios, shards: 1, concurrency: 1, retries, signed_out_path: '/login' } });
   const h = await harness({ config, outDir: await mkdtemp(join(tmpdir(), 'qa-obl-')) });
   open.push(h);
   return h;
@@ -234,4 +234,18 @@ describe.skipIf(!DATABASE_URL)('effect obligations (re-audit R1)', () => {
     expect(gate.eligible).toBe(false);
     expect(gate.reasons).toContain(`effect obligation x.i1 (checkout.submit in checkout_existing_customer@chromium_desktop, run ${run} attempt 1) is DISPATCHING and still in progress`);
   });
+
+  it('review-3 N2: inside one service shard, a retry never replays a checkout whose effect could not be looked up, and the gate holds', async () => {
+    const h = await setup(['checkout_existing_customer'], 2);
+    const a = await app();
+    a.control.effectsDelayMs = 11_000; // longer than the adapter's 10 s lookup timeout: the effect cannot be established
+    const run = await deploy(h, a, 'svc-retry-1');
+    await h.worker.drain();
+    const r = (await api(h, h.tokens.viewer!, 'GET', `/v1/runs/${run}`)).json();
+    expect(a.store.writes.filter((w) => w.path === '/checkout')).toHaveLength(1);
+    expect(r.cases.map((c: { verdict: string; result: { reason: string } }) => [c.verdict, c.result.reason])).toEqual([['NEEDS_REVIEW', 'effect_unreconciled']]);
+    expect(r.run.gate.eligible).toBe(false);
+    const open = (await api(h, h.tokens.viewer!, 'GET', `/v1/runs/${run}/obligations`)).json().obligations as Array<{ contract_intent: string; state: string }>;
+    expect(open.map((o) => [o.contract_intent, o.state])).toEqual([['checkout.submit', 'NEEDS_REVIEW']]);
+  }, 120_000);
 });

@@ -1,5 +1,12 @@
 # Re-audit closure (R1–R5)
 
+> **Extended by the third review.** Review of `c70d0ef` found three residual
+> issues in this work: retries inside one execution could replay an unresolved
+> effect (N2, extends R1), generated or overflowing secret text escaped the
+> pixel mask (N1, extends R4), and revocation did not reach running shards
+> (N3, extends R5). They are fixed, with an enforced sandbox memory limit; see
+> [`review3-closure.md`](review3-closure.md).
+
 This report responds to the independent re-audit of merged PR #2, which reviewed revision
 `c750de1f67b9f4c78eec9a0c5f2214bb422c820a`. The work is on branch `claude/new-session-lnwzm0`.
 
@@ -38,8 +45,8 @@ existed at the reviewed revision, feature-detecting the newer identity API.
 
 | Where | Result | Log |
 |---|---|---|
-| Worktree at `c750de1` | 7/7 assertion failures, no setup errors | `docs/evidence/reaudit/probes-at-c750de1.log` |
-| This branch | 7/7 pass | `docs/evidence/reaudit/probes-after-fix.log` |
+| Worktree at `c750de1` | 7/7 assertion failures, no setup errors | `docs/evidence/reaudit/probes-at-c750de1.txt` |
+| This branch | 7/7 pass | `docs/evidence/reaudit/probes-after-fix.txt` |
 
 The re-audit's own review bundle was not available in this environment, so these probes were
 written from the report's descriptions. They preserve its safety requirements: no assertion is

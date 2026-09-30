@@ -133,6 +133,21 @@ export class PgIntentStore implements IntentStore {
     return this.scoped(OUTSTANDING.replace('$UNRESOLVED', '$4'));
   }
 
+  /** This run's open obligations for one case, including this job's own attempts (not other jobs still in progress). */
+  async openFor(scenarioId: string, executionProfile: string): Promise<IntentRecord[]> {
+    const s = this.scope;
+    const rows = (
+      await this.db.query<Row>(
+        `select ai.* from action_intents ai
+         where ai.run_id = $1 and ai.scenario_id = $2 and ai.execution_profile = $3 and ${OUTSTANDING.replace('$UNRESOLVED', '$5')}
+           and (ai.job_id = $4 or not ${LIVE})
+         order by ai.created_at`,
+        [s.run_id, scenarioId, executionProfile, s.job_id, UNRESOLVED],
+      )
+    ).rows;
+    return Promise.all(rows.map((r) => this.hydrate(r)));
+  }
+
   private async scoped(condition: string): Promise<IntentRecord[]> {
     const s = this.scope;
     const rows = (

@@ -58,7 +58,10 @@ dispatch: qualify again.
 - **Privacy.** Every captured image masks registered secrets, uninspectable
   content and the policy's `privacy.mask_selectors`; declare selectors for
   regions (e.g. server-rendered images) that can show sensitive data.
-- **Qualification.** Grants expire with their live compatibility evidence;
+- **Retries.** A case whose earlier effect is unresolved is never retried in the
+  same execution; it ends `NEEDS_REVIEW` and the gate holds until adjudication.
+- **Qualification.** Grants expire with their live compatibility evidence and
+  are re-checked (revocation included) before every calibrated action;
   `qa qualification renew` extends one on a current probe of the same model,
   `qa qualification revoke` ends one immediately.
 
@@ -81,6 +84,9 @@ dispatch: qualify again.
 | `QA_S2_PROVIDER=anthropic`, `QA_S2_MODEL`, `ANTHROPIC_API_KEY` | worker | Vision System Two (Claude Messages API). |
 | `QA_VISUAL_REVIEWER=anthropic` | worker | Advisory vision review hints on failed visual comparisons. |
 | `QA_CALIBRATION_DIR` | worker | Calibration registry for calibrated mode. |
+| `QA_SANDBOX_CGROUP` | worker | Delegated parent cgroup (v2 directory with `memory`/`pids` in its `cgroup.subtree_control`, or a v1 memory-hierarchy directory) in which each sandboxed run gets its own memory-limited cgroup. Without a usable cgroup, generated-spec validation returns `error` instead of running. |
+| `QA_SANDBOX_CGROUP_SUDO` | worker | `1`: move sandboxed processes into their cgroup with `sudo -n tee` when the runner cannot write the common ancestor's `cgroup.procs`. |
+| `QA_SANDBOX_MEMORY_MB` | worker | Memory limit for generated-spec validation (default 2048). |
 
 ## Unattended demo flow
 

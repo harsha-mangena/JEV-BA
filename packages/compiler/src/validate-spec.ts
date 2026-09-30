@@ -16,10 +16,14 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
  * Run a generated spec inside the namespace sandbox: its own work directory
  * is the only writable host path, the application under test is the only
  * reachable network endpoint, nothing from the host environment is inherited,
- * and a hard timeout kills the process tree. There is no host fallback: if
- * the sandbox cannot be created the result is `error`, never `passed`.
+ * a hard timeout kills the process tree, and the whole tree runs under an
+ * enforced memory limit. There is no host fallback: if the sandbox or its
+ * memory limit cannot be established the result is `error`, never `passed`.
  */
-export async function validateGeneratedSpec(source: string, o: { workDir: string; baseUrl: string; fixtureToken: string; timeoutMs?: number }): Promise<SpecValidation> {
+/** Memory the generated test (runner and browser together) may use; overridable with QA_SANDBOX_MEMORY_MB. */
+export const GENERATED_SPEC_MEMORY_BYTES = 2048 * 1024 * 1024;
+
+export async function validateGeneratedSpec(source: string, o: { workDir: string; baseUrl: string; fixtureToken: string; timeoutMs?: number; memoryBytes?: number }): Promise<SpecValidation> {
   const lint = lintGeneratedSpec(source);
   if (lint.length) return { status: 'rejected', detail: lint.join('; '), lint };
   const sandbox = await sandboxAvailable();
@@ -49,8 +53,10 @@ export async function validateGeneratedSpec(source: string, o: { workDir: string
     env: { QA_BASE_URL: insideBase, QA_FIXTURE_TOKEN: o.fixtureToken, PLAYWRIGHT_BROWSERS_PATH: browsers },
     allowTcp: { host: LOOPBACK.has(target.hostname) ? '127.0.0.1' : target.hostname, port },
     timeoutMs: o.timeoutMs ?? 120_000,
+    limits: { memoryBytes: o.memoryBytes ?? (Number(process.env.QA_SANDBOX_MEMORY_MB) > 0 ? Number(process.env.QA_SANDBOX_MEMORY_MB) * 1024 * 1024 : GENERATED_SPEC_MEMORY_BYTES) },
   });
   if (r.status === 'unavailable') return { status: 'error', detail: `sandbox could not start: ${r.stderr.slice(0, 300)}`, lint };
+  if (r.exceeded === 'memory') return { status: 'error', detail: `exceeded the sandbox memory limit; process tree killed`, lint };
   if (r.status === 'timeout') return { status: 'error', detail: `timed out after ${o.timeoutMs ?? 120_000} ms; process tree killed`, lint };
   try {
     const res = JSON.parse(await readFile(join(o.workDir, 'results.json'), 'utf8')) as { stats: { expected: number; unexpected: number; skipped: number; flaky: number } };

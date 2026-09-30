@@ -22,7 +22,13 @@ first implementation; its 13 probes run as the mandatory `audit` lane
 result found five residual issues (R1–R5: effect obligations, execution
 contract, deployment lineage, pixel privacy, qualification freshness); they are
 fixed, their probes run in the same lane, and the response is
-[`docs/reaudit-closure.md`](docs/reaudit-closure.md).
+[`docs/reaudit-closure.md`](docs/reaudit-closure.md). A third review found
+three more (N1 pixel masking of generated/overflowing content, N2 in-process
+retries of an unresolved effect, N3 revocation of running shards); they are
+fixed together with an enforced sandbox memory limit —
+[`docs/review3-closure.md`](docs/review3-closure.md), which also separates
+mechanism, fixture proof, authenticated-provider proof and target
+qualification for every area.
 
 | Item | State |
 | --- | --- |

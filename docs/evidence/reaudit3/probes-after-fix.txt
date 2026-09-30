@@ -1,0 +1,11 @@
+ RUN  v3.2.7 <repository>
+REAUDIT3 N2a {"real_receipts_before_loss":1,"checkout_dispatches":1,"orders":0,"verdict":"NEEDS_REVIEW","prior":[],"gate":{"eligible":false,"reasons":["checkout_existing_customer@chromium_desktop: NEEDS_REVIEW on a required check","effect obligation checkout_existing_customer.chromium_desktop.a1.b3cbeb.i2 (checkout.submit in checkout_existing_customer@chromium_desktop) is NEEDS_REVIEW: effect lookup failed: effect lookup response lost"]}}
+REAUDIT3 N2b {"real_receipts_before_loss":1,"checkout_dispatches":1,"orders":0,"verdict":"NEEDS_REVIEW","prior":[],"gate":{"eligible":false,"reasons":["checkout_existing_customer@chromium_desktop: NEEDS_REVIEW on a required check","effect obligation checkout_existing_customer.chromium_desktop.a1.18a93d.i2 (checkout.submit in checkout_existing_customer@chromium_desktop) is NEEDS_REVIEW: effect lookup failed: effect lookup response lost"]}}
+REAUDIT3 N1a {"ok":true,"masked":1,"dark_glyph_pixels":0}
+REAUDIT3 N1b {"ok":true,"masked":1,"dark_pixels_outside_mask":0}
+REAUDIT3 N3 {"before":"ACT","after":"ESCALATE","after_reasons":["qualification_not_current"]}
+ ✓ tests/audit/reaudit3.test.ts (6 tests) 3119ms
+   ✓ N2a: a critical required checkout with an unresolved effect is not replayed by a retry, and the gate holds  1200ms
+   ✓ N2b: a noncritical required checkout with an unresolved effect is not replayed, and flaky-pass policy cannot open the gate  1115ms
+ Test Files  1 passed (1)
+      Tests  6 passed (6)

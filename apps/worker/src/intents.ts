@@ -99,6 +99,12 @@ export interface IntentStore {
   unresolved(): Promise<IntentRecord[]>;
   /** Every obligation still holding this unit of work, including reviews from any earlier fence or attempt. */
   outstanding(): Promise<IntentRecord[]>;
+  /**
+   * Obligations still open for one case anywhere in this logical execution —
+   * earlier fences and attempts *and* this execution's own attempts. Checked
+   * before every attempt: a case with an open obligation is never dispatched again.
+   */
+  openFor(scenarioId: string, executionProfile: string): Promise<IntentRecord[]>;
   get(intentId: string): Promise<IntentRecord | undefined>;
 }
 
@@ -138,6 +144,10 @@ export class MemoryIntentStore implements IntentStore {
 
   async outstanding(): Promise<IntentRecord[]> {
     return [...this.records.values()].filter(isOutstanding);
+  }
+
+  async openFor(scenarioId: string, executionProfile: string): Promise<IntentRecord[]> {
+    return [...this.records.values()].filter((r) => r.scenario_id === scenarioId && r.execution_profile === executionProfile && isOutstanding(r));
   }
 
   async adjudicate(intentId: string, a: Adjudication): Promise<void> {

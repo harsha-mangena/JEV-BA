@@ -1,0 +1,11 @@
+ RUN  v3.2.7 <repository>
+REAUDIT R1a {"lookups":1,"state_after_recovery":"RECONCILED"}
+REAUDIT R1b {"first":["NEEDS_REVIEW"],"second":["NEEDS_REVIEW"]}
+REAUDIT R1c {"eligible":false,"run_id":"run_1","reasons":["effect obligation old.i5 (notes.delete in notes_crud@chromium_desktop, run run_1 attempt 1) is NEEDS_REVIEW with no adjudication"]}
+REAUDIT R2a {"a":"exec_efdba79f2e0ce2f640682b2a","b":"exec_cc11a4b2e2f9df53754b23d1"}
+REAUDIT R2b {"eligible":false,"run_id":"run_1","reasons":["suite or policy changed since the run; results are stale (execution contract exec_efdba79f2e0ce2f640682b2a → exec_cc11a4b2e2f9df53754b23d1: baselines; decision; environment; oracle; rendering; schema; suite; verification)"]}
+REAUDIT R4 {"residual_hits":0,"image_retained":false,"image_unchanged":false}
+REAUDIT R5 {"qualified_at":"1996-01-10T00:00:00.000Z","found_now":false}
+ ✓ tests/audit/reaudit.test.ts (7 tests) 513ms
+ Test Files  1 passed (1)
+      Tests  7 passed (7)

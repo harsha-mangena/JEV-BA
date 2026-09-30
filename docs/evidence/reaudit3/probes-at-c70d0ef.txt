@@ -1,0 +1,20 @@
+ RUN  v3.2.7 <repository at c70d0ef>
+REAUDIT3 N2a {"real_receipts_before_loss":1,"checkout_dispatches":2,"orders":0,"verdict":"FLAKY","prior":["NEEDS_REVIEW/effect_unreconciled"],"gate":{"eligible":false,"reasons":["checkout_existing_customer@chromium_desktop: FLAKY critical journey holds by default"]}}
+REAUDIT3 N2b {"real_receipts_before_loss":1,"checkout_dispatches":2,"orders":0,"verdict":"FLAKY","prior":["NEEDS_REVIEW/effect_unreconciled"],"gate":{"eligible":true,"reasons":[]}}
+REAUDIT3 N1a {"ok":true,"masked":0,"dark_glyph_pixels":639}
+REAUDIT3 N1b {"ok":true,"masked":1,"dark_pixels_outside_mask":526}
+REAUDIT3 N3 {"before":"ACT","after":"ACT","after_reasons":["calibrated:cal1"]}
+   × N2a: a critical required checkout with an unresolved effect is not replayed by a retry, and the gate holds 2274ms
+     → no second checkout while the first effect is unresolved: expected 2 to be 1 // Object.is equality
+   × N2b: a noncritical required checkout with an unresolved effect is not replayed, and flaky-pass policy cannot open the gate 2096ms
+     → no second checkout while the first effect is unresolved: expected 2 to be 1 // Object.is equality
+   ✓ N1 control: an ordinary in-bounds secret is masked and the image is accepted 178ms
+   × N1a: a secret rendered as CSS generated content is masked or the image is withheld 143ms
+     → generated-content glyphs must not be visible in an accepted image: expected 639 to be +0 // Object.is equality
+   × N1b: a secret overflowing its element box is masked over its full painted extent or the image is withheld 139ms
+     → overflowing glyphs must not be visible in an accepted image: expected 526 to be +0 // Object.is equality
+   × N3: a revoked qualification stops the next calibrated decision of a running shard 22ms
+     → a revoked qualification must not authorize the next calibrated action: expected 'ACT' not to be 'ACT' // Object.is equality
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+ Test Files  1 failed (1)
+      Tests  5 failed | 1 passed (6)

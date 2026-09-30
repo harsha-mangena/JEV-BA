@@ -174,3 +174,38 @@ test('probe another loopback service', async () => {
     await expect(readFile(outside)).rejects.toThrow();
   });
 });
+
+describe('enforced memory limit', () => {
+  it('kills a program that exceeds its memory limit (whole tree, via its own cgroup) and reports it', async () => {
+    const r = await hostile('mem', `const a = []; for (;;) a.push(Buffer.alloc(1 << 20, 1));`, { limits: { memoryBytes: 96 * 1024 * 1024 } });
+    expect(r.status, r.stderr).toBe('exited');
+    expect(r.exceeded).toBe('memory');
+    expect(r.code === 137 || r.signal === 'SIGKILL' || r.code !== 0).toBe(true);
+  });
+
+  it('bounds child processes too: memory used by descendants counts against the same limit', async () => {
+    const r = await hostile(
+      'mem-tree',
+      `const cp = require('child_process');
+       const kids = Array.from({ length: 4 }, () => cp.spawn(process.execPath, ['-e', 'const a=[];for(;;)a.push(Buffer.alloc(1<<20,1))'], { stdio: 'ignore' }));
+       setTimeout(() => { console.log(JSON.stringify({ alive: kids.filter((k) => k.exitCode === null && k.signalCode === null).length })); process.exit(0); }, 4000);`,
+      { limits: { memoryBytes: 128 * 1024 * 1024 } },
+    );
+    expect(r.exceeded).toBe('memory');
+  });
+
+  it('a program within its limit runs normally', async () => {
+    const r = await hostile('mem-ok', `const b = Buffer.alloc(16 << 20, 1); console.log(b.length)`, { limits: { memoryBytes: 256 * 1024 * 1024 } });
+    expect(r.status, r.stderr).toBe('exited');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.exceeded).toBeUndefined();
+    expect(r.stdout.trim()).toBe(String(16 << 20));
+  });
+
+  it('refuses to run at all when the limit cannot be enforced (no fallback)', async () => {
+    const r = await hostile('mem-none', `console.log('ran')`, { limits: { memoryBytes: 64 * 1024 * 1024 }, hostEnv: { QA_SANDBOX_CGROUP: '/nonexistent/cgroup' } });
+    expect(r.status).toBe('unavailable');
+    expect(r.stdout).not.toContain('ran');
+    expect(r.stderr).toMatch(/memory limit cannot be enforced/);
+  });
+});

@@ -3,6 +3,7 @@ import { chmod, chown, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createSandboxCgroup, type SandboxCgroup } from './cgroup.ts';
 
 /**
  * Linux namespace sandbox for generated or repaired test code (audit F03).
@@ -18,6 +19,10 @@ import { dirname, join } from 'node:path';
  *     other host service or external address is reachable;
  *   - privileges: no_new_privs, empty capability bounding set before the
  *     untrusted program runs; rlimits on processes, files and core dumps;
+ *   - memory: with `limits.memoryBytes`, the whole process tree runs in its
+ *     own control group with that memory limit (and a process cap), joined
+ *     before any untrusted code runs; if the limit cannot be enforced, nothing
+ *     runs;
  *   - lifetime: a hard timeout kills the whole process group, and the PID
  *     namespace dies with its init.
  * There is no fallback: if the sandbox cannot be created, nothing runs.
@@ -42,11 +47,15 @@ export interface SandboxRun {
    * thread count plus a small allowance for host churn plus this budget (otherwise
    * a busy CI user could not even start the sandbox).
    */
-  limits?: { nproc?: number; nofile?: number; fsizeBytes?: number };
+  limits?: { nproc?: number; nofile?: number; fsizeBytes?: number; memoryBytes?: number };
+  /** Environment of the runner itself (cgroup delegation settings); defaults to process.env. */
+  hostEnv?: NodeJS.ProcessEnv;
 }
 
 export interface SandboxResult {
   status: 'exited' | 'timeout' | 'unavailable';
+  /** A resource limit the program hit (it was killed for it). */
+  exceeded?: 'memory';
   code: number | null;
   signal: string | null;
   stdout: string;
@@ -143,6 +152,7 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
   const run = await mkdtemp(join(tmpdir(), 'qa-sbx-run-'));
   const root = await mkdtemp(join(tmpdir(), 'qa-sbx-root-'));
   let relay: Server | undefined;
+  let cgroup: SandboxCgroup | undefined;
   try {
     await mkdir(o.workDir, { recursive: true });
     await writeFile(join(run, 'relay.cjs'), RELAY);
@@ -191,8 +201,17 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
       SBX_RELAY_HOST: o.allowTcp?.host ?? '',
       SBX_RELAY_PORT: o.allowTcp ? String(o.allowTcp.port) : '',
     };
+    if (lim.memoryBytes !== undefined) {
+      const cg = await createSandboxCgroup({ memoryBytes: lim.memoryBytes, pids: lim.nproc ?? 1024 }, o.hostEnv ?? process.env);
+      if ('unavailable' in cg) return { status: 'unavailable', code: null, signal: null, stdout: '', stderr: `memory limit cannot be enforced: ${cg.unavailable}` };
+      cgroup = cg;
+    }
     return await new Promise<SandboxResult>((resolve) => {
-      const child = spawn('prlimit', argv, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      // With a cgroup, a gate holds the process until it has been moved into the cgroup; only then does it exec
+      // anything else, so nothing runs outside the limit.
+      const child = cgroup
+        ? spawn('/bin/sh', ['-c', 'read _gate && exec "$@"', 'qa-sandbox-gate', 'prlimit', ...argv], { env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+        : spawn('prlimit', argv, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       const cap = (s: string, d: Buffer) => (s.length < 1_000_000 ? s + d.toString() : s);
@@ -213,10 +232,28 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
       });
       child.on('close', (code, signal) => {
         clearTimeout(timer);
-        resolve({ status: timedOut ? 'timeout' : 'exited', code, signal, stdout, stderr });
+        void (async () => {
+          const exceeded = cgroup && (await cgroup.stats()).oomKilled ? ('memory' as const) : undefined;
+          resolve({ status: timedOut ? 'timeout' : 'exited', ...(exceeded ? { exceeded } : {}), code, signal, stdout, stderr });
+        })();
       });
+      if (cgroup) {
+        cgroup.join(child.pid!).then(
+          () => child.stdin!.end('go\n'),
+          (e: Error) => {
+            try {
+              process.kill(-child.pid!, 'SIGKILL');
+            } catch {
+              /* already gone */
+            }
+            clearTimeout(timer);
+            resolve({ status: 'unavailable', code: null, signal: null, stdout, stderr: `memory limit cannot be enforced: joining ${cgroup!.path} failed: ${e.message}` });
+          },
+        );
+      }
     });
   } finally {
+    await cgroup?.destroy().catch(() => undefined);
     relay?.close();
     await rm(run, { recursive: true, force: true }).catch(() => undefined);
     await rm(root, { recursive: true, force: true }).catch(() => undefined);
