@@ -164,4 +164,33 @@ this threat model. Author styles, ordinary page activity and CSP are covered.
 
 ## 5. Lanes on the final commit
 
-LANES_PLACEHOLDER
+These lanes ran on commit `262cb4b` with a clean tree. The manifests are in
+`docs/evidence/review4-lanes/`: each one records `dirty: false`, its counts, its skips (none) and any
+missing prerequisite. The first run of each lane is the one recorded; nothing was re-run to reach
+these results.
+
+| Lane | Command | Result (local) |
+|---|---|---|
+| static | `npm run lane -- static` | PASSED |
+| unit | `npm run lane -- unit` | 189/189, 0 failed, 0 skipped |
+| e2e | `npm run lane -- e2e` | 98/98, 0 failed, 0 skipped. The 10 new tests are 9 suppression cases and 1 watch case. |
+| service | `QA_REQUIRE_SERVICE=1 DATABASE_URL=… npm run lane -- service` | 49/49, 0 failed, 0 skipped (PostgreSQL 16) |
+| audit | `npm run lane -- audit` | 30/30: 13 original, 7 re-audit, 6 third-review and 4 fourth-review probes |
+| isolation | `npm run lane -- isolation` | 16/16, including 4 new cgroup-validation tests (cgroup v1 locally) |
+| live | `npm run lane -- live` | **BLOCKED**: missing `QA_S1_API_KEY`. It was not run and is not counted as passing. |
+| live_s2 | `npm run lane -- live_s2` | **BLOCKED**: missing `ANTHROPIC_API_KEY`. It was not run and is not counted as passing. |
+| spec validation | `npm run qa -- validate` | all scenarios ok |
+| deployment flow | `docker build -t jev-ba/qa:local . && node deploy/demo/run-demo.mjs --out docs/evidence/review4-demo` | PASSED |
+
+The deployment flow passed all three steps:
+1. The clean deployment was promoted.
+2. The defective deployment was held.
+3. A run whose worker crashed mid-checkout was held, then recovered after adjudication and retry.
+
+This is fixture proof only.
+
+**Local and CI scope.**
+- Everything in this table ran locally, on Linux with cgroup v1, root, and Chromium 141.
+- GitHub CI runs the same mandatory lanes on cgroup v2, with a delegated parent. The CI result for
+  the pushed commit is recorded in the pull request, not here.
+- Neither environment establishes a real deployment integration.

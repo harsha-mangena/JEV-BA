@@ -1,0 +1,22 @@
+
+ RUN  v3.2.7 /home/user/JEV-BA
+
+stdout | tests/audit/reaudit4.test.ts > P4 control: positioned black generated content outside the host box is not published
+REAUDIT4 P4-control {"glyph_pixels":2697,"ok":true,"masked":1,"leaked":0}
+
+stdout | tests/audit/reaudit4.test.ts > P4a: an author !important visibility rule on the pseudo-element cannot defeat the privacy verification
+REAUDIT4 P4a {"glyph_pixels":2697,"ok":true,"masked":1,"leaked":0}
+
+stdout | tests/audit/reaudit4.test.ts > P4b: low-contrast secret glyphs are not accepted as rasterization noise
+REAUDIT4 P4b {"glyph_pixels":2784,"ok":true,"masked":1,"leaked":0}
+
+stdout | tests/audit/reaudit4.test.ts > P4c: an ordinary writable directory named as the delegated cgroup parent is rejected (fail closed)
+REAUDIT4 P4c {"fs_type":"0xef53","accepted":false,"unavailable":"no cgroup could be created for the sandbox memory limit (/tmp/qa-fake-cgroup-8Xcgg9: not on a cgroup filesystem); delegate one with QA_SANDBOX_CGROUP"}
+
+ ✓ tests/audit/reaudit4.test.ts (4 tests) 808ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  17:17:09
+   Duration  2.43s (transform 308ms, setup 0ms, collect 1.31s, tests 808ms, environment 0ms, prepare 56ms)
+
