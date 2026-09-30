@@ -57,7 +57,11 @@ dispatch: qualify again.
   (audited); held cases then need `POST /v1/runs/:id/retry`.
 - **Privacy.** Every captured image masks registered secrets, uninspectable
   content and the policy's `privacy.mask_selectors`; declare selectors for
-  regions (e.g. server-rendered images) that can show sensitive data.
+  regions (e.g. server-rendered images) that can show sensitive data. The
+  image is taken while that content's paint is suppressed and verified hidden;
+  when that cannot be shown (for example closed shadow roots outside
+  Chromium, or a page that keeps rewriting the content during capture) the
+  image is withheld and the reason is recorded in the evidence log.
 - **Retries.** A case whose earlier effect is unresolved is never retried in the
   same execution; it ends `NEEDS_REVIEW` and the gate holds until adjudication.
 - **Qualification.** Grants expire with their live compatibility evidence and
@@ -84,7 +88,7 @@ dispatch: qualify again.
 | `QA_S2_PROVIDER=anthropic`, `QA_S2_MODEL`, `ANTHROPIC_API_KEY` | worker | Vision System Two (Claude Messages API). |
 | `QA_VISUAL_REVIEWER=anthropic` | worker | Advisory vision review hints on failed visual comparisons. |
 | `QA_CALIBRATION_DIR` | worker | Calibration registry for calibrated mode. |
-| `QA_SANDBOX_CGROUP` | worker | Delegated parent cgroup (v2 directory with `memory`/`pids` in its `cgroup.subtree_control`, or a v1 memory-hierarchy directory) in which each sandboxed run gets its own memory-limited cgroup. Without a usable cgroup, generated-spec validation returns `error` instead of running. |
+| `QA_SANDBOX_CGROUP` | worker | Delegated parent cgroup (v2 directory with `memory` and `pids` in its `cgroup.subtree_control`, or a v1 memory-hierarchy directory) in which each sandboxed run gets its own memory-limited cgroup. It must be on a cgroup filesystem: an ordinary directory or a hand-made layout is rejected, limits must read back as set, and each process's membership is verified before it runs. Without a usable cgroup, generated-spec validation returns `error` instead of running. |
 | `QA_SANDBOX_CGROUP_SUDO` | worker | `1`: move sandboxed processes into their cgroup with `sudo -n tee` when the runner cannot write the common ancestor's `cgroup.procs`. |
 | `QA_SANDBOX_MEMORY_MB` | worker | Memory limit for generated-spec validation (default 2048). |
 

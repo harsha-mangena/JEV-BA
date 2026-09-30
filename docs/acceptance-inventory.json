@@ -540,7 +540,7 @@
       ],
       "external_prerequisite": null,
       "scope": "evidence screenshots, visual candidates and diffs, S2 request images",
-      "notes": "Detection includes ::before/::after/::marker content (attr() resolved). Overlays cover element box, text line boxes and descendant boxes. A second capture with all sensitive content invisible must match the first beyond rasterization noise, or the image is withheld (catches text-shadow, transforms and anything detection misses).",
+      "notes": "Detection includes ::before/::after/::marker content (attr() resolved). Overlays cover element box, text line boxes and descendant boxes. Superseded in its verification step by P4a/P4b: the earlier paired-capture comparison with a rasterization tolerance is gone; the published image is the verified-suppressed capture.",
       "levels": {
         "mechanism": "implemented",
         "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
@@ -610,9 +610,78 @@
         "isolation",
         "e2e"
       ],
-      "external_prerequisite": "A delegated cgroup (QA_SANDBOX_CGROUP) wherever generated specs are validated; without one, validation errors instead of running",
+      "external_prerequisite": "A delegated kernel cgroup (QA_SANDBOX_CGROUP: cgroup v2 with memory and pids in cgroup.subtree_control, or the v1 memory hierarchy) wherever generated specs are validated; without one, validation errors instead of running",
       "scope": "namespace sandbox",
-      "notes": "Per-run cgroup (v2, or v1 memory/pids) joined before any untrusted code runs; OOM kills reported; no fallback. Verified locally on cgroup v1 and in CI on cgroup v2.",
+      "notes": "Per-run cgroup (v2, or v1 memory/pids) joined before any untrusted code runs; OOM kills reported; no fallback. Since P4c the parent must be on a cgroup filesystem with the controllers delegated, only kernel-created control files are written, limits must read back and membership is verified before the gate opens. Verified locally on cgroup v1 and in CI on cgroup v2.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "P4a",
+      "title": "Screenshot privacy cannot be defeated by author styles",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit4.test.ts#P4a",
+        "tests/e2e/pixel-privacy.test.ts#suppression cannot be defeated by the page"
+      ],
+      "lanes": [
+        "audit",
+        "e2e"
+      ],
+      "external_prerequisite": null,
+      "scope": "safeScreenshot: evidence screenshots, visual candidates and diffs, S2 request images",
+      "notes": "Sensitive paint is suppressed by inline and first-cascade-layer !important declarations in every tree scope (constructed-sheet fallback under CSP), with transitions and animations off. Suppression is verified, not assumed: every suppressed element and painting pseudo-element must compute visibility hidden immediately before and after the capture, including closed and user-agent shadow trees (DevTools protocol), and the suppressed subtrees are watched during capture. Unverified: retried twice, then withheld. Closed and user-agent shadow content can only be verified in Chromium; elsewhere such subtrees are withheld.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "P4b",
+      "title": "No pixel-difference tolerance defines the confidentiality boundary",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit4.test.ts#P4b",
+        "tests/e2e/pixel-privacy.test.ts#suppression cannot be defeated by the page"
+      ],
+      "lanes": [
+        "audit",
+        "e2e"
+      ],
+      "external_prerequisite": null,
+      "scope": "safeScreenshot",
+      "notes": "The published image is the capture taken while sensitive paint is verified suppressed, so low-contrast, translucent, overflowing or positioned sensitive glyphs are absent from it; the paired visible/hidden comparison and its 12-level noise budget were removed. Decoded-pixel tests cover rgb(245,245,245) on white and opacity 0.03.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "P4c",
+      "title": "Only a real, delegated kernel cgroup is accepted for the memory limit",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "tests": [
+        "tests/audit/reaudit4.test.ts#P4c",
+        "tests/isolation/sandbox.test.ts#only a real, delegated kernel cgroup is accepted"
+      ],
+      "lanes": [
+        "audit",
+        "isolation"
+      ],
+      "external_prerequisite": "A delegated kernel cgroup where generated specs are validated (see MEM)",
+      "scope": "packages/compiler cgroup factory and sandbox gate",
+      "notes": "statfs must report cgroup or cgroup2; v2 requires cgroup.controllers and memory (and pids) in cgroup.subtree_control; v1 requires the memory hierarchy; control files must have been created by the kernel (opened without O_CREAT); memory, swap and pids limits must read back; join verifies membership in cgroup.procs and /proc/<pid>/cgroup before the execution gate is released. Ordinary directories, hand-made layouts and non-delegated hierarchies are rejected before dispatch.",
       "levels": {
         "mechanism": "implemented",
         "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
@@ -644,5 +713,15 @@
       "docs/evidence/reaudit3/probes-after-fix.txt"
     ],
     "report": "docs/review3-closure.md"
+  },
+  "review4": {
+    "reviewed_revision": "333f23ce5e66a007dffd7a78d5db5f3fcf056922",
+    "probes": "tests/audit/reaudit4.test.ts",
+    "evidence": [
+      "docs/evidence/reaudit4/probes-at-333f23c.txt",
+      "docs/evidence/reaudit4/probes-after-fix.txt"
+    ],
+    "lanes": "docs/evidence/review4-lanes/",
+    "report": "docs/review4-closure.md"
   }
 }

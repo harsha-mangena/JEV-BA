@@ -1,13 +1,12 @@
 import type { Locator, Page } from '@playwright/test';
-import { PNG } from 'pngjs';
 
 /**
  * Pixel-level privacy for every image the system captures (re-audit R4,
- * review-3 N1).
+ * review-3 N1, review-4 P4a/P4b).
  *
  * Text redaction cannot make an image safe: a secret painted into pixels is
- * not the secret's bytes. So masking happens in the page, before capture, and
- * is then *verified on pixels*:
+ * not the secret's bytes. So the image is made safe in the page, before
+ * capture, and what is published is established rather than estimated:
  *
  *  1. Detection marks every rendered element that shows a registered secret —
  *     in its text, its form value, or its CSS generated content (::before /
@@ -15,17 +14,25 @@ import { PNG } from 'pngjs';
  *     case-insensitively, plus every declared sensitive selector and
  *     everything that cannot be inspected (cross-origin frames, shadow hosts
  *     without an open root, canvas, video, embedded objects).
- *  2. Masking covers each marked element's full painted extent, not just its
- *     box: opaque overlays are placed over the element box, every text line
- *     box and every descendant box (so overflowing, wrapped and positioned
- *     content is covered). Replaced elements and shadow hosts are masked by
- *     box.
- *  3. Verification captures the page twice — as is, and with every marked
- *     element (and all its descendants and generated content) made invisible.
- *     Any pixel that differs is sensitive paint the masks did not cover
- *     (overflow, transforms, positioned or generated content, animation), and
- *     the image is withheld. A DOM re-scan after capture also withholds the
- *     image when sensitive content appeared meanwhile.
+ *  2. Masking covers each marked element's box, every text line box and every
+ *     descendant box with opaque overlays; replaced elements and shadow hosts
+ *     are masked by box. The masks show where content was redacted.
+ *  3. Suppression: the paint of every marked element — its whole flat subtree
+ *     and every pseudo-element — is switched off in a way author styles cannot
+ *     override (inline and first-cascade-layer `!important`, in every tree
+ *     scope, with a constructed-sheet fallback where a CSP blocks injected
+ *     styles; no transitions or animations).
+ *  4. Verification: immediately before and after the capture, every suppressed
+ *     element and pseudo-element must compute `visibility: hidden` — including
+ *     inside closed and browser-internal shadow trees, via the DevTools
+ *     protocol — and the page is watched for changes to the suppressed content
+ *     in between. The published image is that suppressed capture: sensitive
+ *     paint that escaped the masks (overflow, transforms, positioned or
+ *     generated content, low-contrast or translucent glyphs) is simply absent
+ *     from it. No pixel-difference tolerance is involved.
+ *  5. Anything unverified is retried a bounded number of times, then the image
+ *     is withheld with the reason; a DOM re-scan after capture also withholds
+ *     it when sensitive content appeared meanwhile.
  */
 export const SENSITIVE_ATTR = 'data-qa-sensitive';
 const OVERLAY_ATTR = 'data-qa-mask-overlay';
@@ -208,30 +215,6 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
   return { overlays, unsafe };
 }
 
-/** Make every marked element, its descendants and its generated content invisible (overlays stay), or undo it. */
-async function hideMarked(page: Page, hide: boolean): Promise<void> {
-  for (const f of page.frames()) {
-    await f
-      .evaluate(
-        ({ hide, attr, overlayAttr, id }) => {
-          const roots: Array<Document | ShadowRoot> = [document];
-          for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
-          for (const root of roots) {
-            const at = root instanceof Document ? root.head ?? root.documentElement : root;
-            root.querySelector(`#${id}`)?.remove();
-            if (!hide) continue;
-            const s = document.createElement('style');
-            s.id = id;
-            s.textContent = `[${attr}],[${attr}] *,[${attr}]::before,[${attr}]::after,[${attr}] *::before,[${attr}] *::after{visibility:hidden!important}[${attr}] [${overlayAttr}]{visibility:visible!important}`;
-            at.appendChild(s);
-          }
-        },
-        { hide, attr: SENSITIVE_ATTR, overlayAttr: OVERLAY_ATTR, id: HIDE_STYLE_ID },
-      )
-      .catch(() => undefined);
-  }
-}
-
 /** Locators for every element masked by box (one per frame), for Playwright's screenshot `mask`. */
 export function sensitiveLocators(page: Page): Locator[] {
   return page.frames().map((f) => f.locator(`[${BOX_ATTR}]`));
@@ -241,48 +224,301 @@ export async function unmarkSensitive(page: Page): Promise<void> {
   for (const f of page.frames()) {
     await f
       .evaluate(
-        ({ attrs, overlayAttr, id }) => {
+        ({ attrs, overlayAttr }) => {
           const roots: Array<Document | ShadowRoot> = [document];
           for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
           for (const root of roots) {
             root.querySelectorAll(`[${overlayAttr}]`).forEach((e) => e.remove());
-            root.querySelector(`#${id}`)?.remove();
             for (const a of attrs) root.querySelectorAll(`[${a}]`).forEach((e) => e.removeAttribute(a));
           }
         },
-        { attrs: [SENSITIVE_ATTR, BOX_ATTR], overlayAttr: OVERLAY_ATTR, id: HIDE_STYLE_ID },
+        { attrs: [SENSITIVE_ATTR, BOX_ATTR], overlayAttr: OVERLAY_ATTR },
+      )
+      .catch(() => undefined);
+  }
+}
+
+
+/** Our own attribute on every element whose paint is suppressed for the published capture. */
+const HIDE_ATTR = 'data-qa-suppressed';
+/** Pseudo-elements that can paint content of their own and are checked element by element. */
+const PAINTING_PSEUDOS = ['::before', '::after', '::marker', '::first-letter', '::first-line', '::placeholder', '::file-selector-button'];
+/** Suppression, verification and capture attempts before the image is withheld. */
+const SUPPRESS_ATTEMPTS = 3;
+/** Global (per frame) under which the page's original inline styles are kept while suppressed. */
+const SAVED_KEY = '__qaPrivacySuppressed__';
+
+/**
+ * Suppress the paint of every marked element in every frame: the element, its
+ * whole flat subtree (light descendants and open shadow trees) and every
+ * pseudo-element of each, except our own overlays.
+ *
+ * Author styles are defeated rather than assumed away: each suppressed element
+ * gets an inline `!important` declaration (the page's own inline style is kept
+ * and restored afterwards), and each tree scope gets a stylesheet placed
+ * *first*, whose rules sit in the first-declared cascade layer — for
+ * `!important` declarations the first layer wins over every later layer and
+ * over all unlayered author rules. Transitions and animations are switched off
+ * for the same elements so neither can hold a visible value. None of this is
+ * trusted: `verifySuppressed` checks the result.
+ */
+async function suppressMarked(page: Page): Promise<number> {
+  let n = 0;
+  for (const f of page.frames()) {
+    const r = await f
+      .evaluate(
+        ({ attr, hideAttr, overlayAttr, id, key, pseudos }) => {
+          const saved = new Map<Element, string | null>();
+          (globalThis as Record<string, unknown>)[key] = saved;
+          const scopes = new Set<Document | ShadowRoot>();
+          const hide = (e: Element) => {
+            if (e.hasAttribute(overlayAttr) || e.hasAttribute(hideAttr)) return;
+            saved.set(e, e.getAttribute('style'));
+            e.setAttribute(hideAttr, '');
+            const st = (e as HTMLElement | SVGElement).style;
+            if (st) for (const [p, v] of [['visibility', 'hidden'], ['transition', 'none'], ['animation', 'none']] as const) st.setProperty(p, v, 'important');
+            scopes.add(e.getRootNode() as Document | ShadowRoot);
+            for (const c of e.children) hide(c);
+            const sr = (e as HTMLElement).shadowRoot;
+            if (sr) for (const c of sr.children) hide(c);
+          };
+          const roots: Array<Document | ShadowRoot> = [document];
+          for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
+          for (const root of roots) root.querySelectorAll(`[${attr}]`).forEach(hide);
+          const sel = [`[${hideAttr}]`, ...pseudos.map((p) => `[${hideAttr}]${p}`)].join(',');
+          // The caret is hidden here too (rather than by the screenshot call, which rewrites style attributes of
+          // form controls mid-capture and would look like a page change to the watch).
+          const css = `@layer qa-privacy-suppress{${sel}{visibility:hidden!important;transition:none!important;animation:none!important}*{caret-color:transparent!important}}`;
+          scopes.add(document);
+          for (const scope of scopes) {
+            scope.getElementById?.(id)?.remove();
+            const s = document.createElement('style');
+            s.id = id;
+            s.textContent = css;
+            if (scope instanceof Document) (scope.head ?? scope.documentElement).prepend(s);
+            else scope.prepend(s);
+            // A policy that blocks injected <style> (CSP style-src) does not block a constructed sheet.
+            try {
+              const sheet = new CSSStyleSheet();
+              sheet.replaceSync(css);
+              (sheet as CSSStyleSheet & { [k: string]: unknown })[id] = true;
+              scope.adoptedStyleSheets = [...scope.adoptedStyleSheets, sheet];
+            } catch {
+              /* the <style> above, and verification, remain */
+            }
+          }
+          return saved.size;
+        },
+        { attr: SENSITIVE_ATTR, hideAttr: HIDE_ATTR, overlayAttr: OVERLAY_ATTR, id: HIDE_STYLE_ID, key: SAVED_KEY, pseudos: PAINTING_PSEUDOS },
+      )
+      .catch((e: Error) => e);
+    if (r instanceof Error) {
+      if (!f.isDetached()) throw new Error(`sensitive content could not be suppressed in ${f === page.mainFrame() ? 'the page' : `frame ${f.url()}`}: ${r.message.split('\n')[0]}`);
+      continue;
+    }
+    n += r;
+  }
+  return n;
+}
+
+/** Undo `suppressMarked`: the page's own inline styles come back exactly as they were. */
+async function restoreMarked(page: Page): Promise<void> {
+  for (const f of page.frames()) {
+    await f
+      .evaluate(
+        ({ hideAttr, id, key }) => {
+          const g = globalThis as Record<string, unknown>;
+          const saved = g[key] as Map<Element, string | null> | undefined;
+          delete g[key];
+          for (const [e, style] of saved ?? []) {
+            // Through the CSSOM, which a CSP that forbids setting style attributes still allows.
+            if (style === null) e.removeAttribute('style');
+            else (e as HTMLElement).style.cssText = style;
+            e.removeAttribute(hideAttr);
+          }
+          const roots: Array<Document | ShadowRoot> = [document];
+          for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
+          for (const root of roots) {
+            root.querySelectorAll(`style#${id}`).forEach((s) => s.remove());
+            if (root.adoptedStyleSheets.some((x) => (x as CSSStyleSheet & { [k: string]: unknown })[id])) root.adoptedStyleSheets = root.adoptedStyleSheets.filter((x) => !(x as CSSStyleSheet & { [k: string]: unknown })[id]);
+            root.querySelectorAll(`[${hideAttr}]`).forEach((e) => e.removeAttribute(hideAttr));
+          }
+        },
+        { hideAttr: HIDE_ATTR, id: HIDE_STYLE_ID, key: SAVED_KEY },
       )
       .catch(() => undefined);
   }
 }
 
 /**
- * Rasterization noise between two captures of the same page stays within a few
- * levels per channel (anti-aliasing of tiles repainted in a different order);
- * painted content — a glyph, a shadow, an image — differs far more.
+ * Establish that nothing sensitive can paint: every suppressed element and
+ * each of its painting pseudo-elements must compute `visibility: hidden` (or
+ * `collapse`), and nothing new may have appeared inside a marked subtree.
+ * Page script reaches light and open shadow trees; closed and browser-internal
+ * (user-agent) shadow trees are checked through the DevTools protocol, and in
+ * a browser without it a suppressed subtree that may contain one is reported
+ * as unverifiable. Returns what could not be verified (empty → suppressed).
  */
-const NOISE_LEVELS = 12;
-/** Paired captures tried before a mismatch is treated as a leak. */
-const VERIFY_ATTEMPTS = 3;
-
-/** Pixels that differ beyond rasterization noise between two captures (null when their geometry differs). */
-function differingPixels(a: Buffer, b: Buffer): number | null {
-  const x = PNG.sync.read(a);
-  const y = PNG.sync.read(b);
-  if (x.width !== y.width || x.height !== y.height) return null;
-  let n = 0;
-  for (let i = 0; i < x.data.length; i += 4) {
-    const d = Math.max(Math.abs(x.data[i]! - y.data[i]!), Math.abs(x.data[i + 1]! - y.data[i + 1]!), Math.abs(x.data[i + 2]! - y.data[i + 2]!), Math.abs(x.data[i + 3]! - y.data[i + 3]!));
-    if (d > NOISE_LEVELS) n++;
+async function verifySuppressed(page: Page): Promise<string[]> {
+  const problems: string[] = [];
+  let sealedCandidates = 0;
+  for (const f of page.frames()) {
+    const r = await f
+      .evaluate(
+        ({ attr, hideAttr, overlayAttr, pseudos }) => {
+          const out: string[] = [];
+          let sealed = 0;
+          const name = (e: Element) => `<${e.tagName.toLowerCase()}${e.id ? `#${e.id}` : ''}>`;
+          const hiddenValue = (v: string) => v === 'hidden' || v === 'collapse';
+          const roots: Array<Document | ShadowRoot> = [document];
+          for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
+          for (const root of roots) {
+            for (const m of root.querySelectorAll(`[${attr}]`)) if (!m.hasAttribute(hideAttr)) out.push(`${name(m)} was marked after suppression`);
+            for (const e of root.querySelectorAll(`[${hideAttr}]`)) {
+              if (!hiddenValue(getComputedStyle(e).visibility)) out.push(`${name(e)} is still visible`);
+              for (const p of pseudos) {
+                const cs = getComputedStyle(e, p);
+                if (cs.length > 0 && !hiddenValue(cs.visibility)) out.push(`${name(e)}${p} is still visible`);
+              }
+              for (const c of [...e.children, ...((e as HTMLElement).shadowRoot?.children ?? [])]) {
+                if (!c.hasAttribute(hideAttr) && !c.hasAttribute(overlayAttr)) out.push(`${name(c)} appeared inside sensitive content after suppression`);
+              }
+              // Content page script cannot inspect: browser-internal trees of form controls and media, and closed shadow roots.
+              if (/^(INPUT|TEXTAREA|SELECT|VIDEO|AUDIO|DETAILS|METER|PROGRESS)$/.test(e.tagName) || (e.tagName.includes('-') && !(e as HTMLElement).shadowRoot)) sealed++;
+            }
+          }
+          return { out, sealed };
+        },
+        { attr: SENSITIVE_ATTR, hideAttr: HIDE_ATTR, overlayAttr: OVERLAY_ATTR, pseudos: PAINTING_PSEUDOS },
+      )
+      .catch((e: Error) => e);
+    if (r instanceof Error) {
+      if (!f.isDetached()) problems.push(`suppression could not be verified in ${f === page.mainFrame() ? 'the page' : `frame ${f.url()}`}: ${r.message.split('\n')[0]}`);
+      continue;
+    }
+    problems.push(...r.out);
+    sealedCandidates += r.sealed;
   }
-  return n;
+  const sealed = await verifySealedTrees(page);
+  if (sealed === null) {
+    if (sealedCandidates > 0) problems.push(`${sealedCandidates} suppressed element(s) may hold closed or browser-internal shadow content, which this browser cannot verify`);
+  } else problems.push(...sealed);
+  return problems;
+}
+
+interface ProtocolNode {
+  nodeId: number;
+  nodeType: number;
+  nodeName: string;
+  pseudoType?: string;
+  shadowRootType?: string;
+  attributes?: string[];
+  children?: ProtocolNode[];
+  pseudoElements?: ProtocolNode[];
+  shadowRoots?: ProtocolNode[];
+  contentDocument?: ProtocolNode;
+}
+
+/**
+ * Chromium: every element and pseudo-element inside a closed or user-agent
+ * shadow tree of a suppressed element must compute hidden too (inner-scope
+ * `!important` rules win over the outer page, so this is not implied by the
+ * host being hidden). Null when the browser has no DevTools protocol.
+ */
+async function verifySealedTrees(page: Page): Promise<string[] | null> {
+  let session;
+  try {
+    session = await page.context().newCDPSession(page);
+  } catch {
+    return null;
+  }
+  try {
+    await session.send('DOM.enable');
+    await session.send('CSS.enable');
+    const { root } = (await session.send('DOM.getDocument', { depth: -1, pierce: true })) as unknown as { root: ProtocolNode };
+    const targets: Array<{ node: ProtocolNode; label: string }> = [];
+    const walk = (n: ProtocolNode, suppressed: boolean, sealed: boolean, path: string) => {
+      const attrs = n.attributes ?? [];
+      let own = suppressed;
+      for (let i = 0; i < attrs.length; i += 2) if (attrs[i] === HIDE_ATTR) own = true;
+      const label = `${path} > ${n.pseudoType ? `::${n.pseudoType}` : n.nodeName.toLowerCase()}`;
+      if (own && sealed && (n.nodeType === 1 || n.pseudoType)) targets.push({ node: n, label });
+      for (const c of n.children ?? []) walk(c, own, sealed, label);
+      for (const c of n.pseudoElements ?? []) walk(c, own, sealed, label);
+      for (const c of n.shadowRoots ?? []) walk(c, own, sealed || c.shadowRootType !== 'open', `${label} #${c.shadowRootType ?? 'shadow'}`);
+      // A frame's document is suppressed (or not) by its own markers: visibility does not cross documents.
+      if (n.contentDocument) walk(n.contentDocument, false, false, label);
+    };
+    walk(root, false, false, 'document');
+    const out: string[] = [];
+    for (const t of targets) {
+      const r = (await session.send('CSS.getComputedStyleForNode', { nodeId: t.node.nodeId }).catch(() => null)) as { computedStyle: Array<{ name: string; value: string }> } | null;
+      const v = r?.computedStyle.find((x) => x.name === 'visibility')?.value;
+      if (v !== 'hidden' && v !== 'collapse') out.push(`${t.label} is ${v ? `still ${v}` : 'unverifiable'}`);
+    }
+    return out;
+  } finally {
+    await session.detach().catch(() => undefined);
+  }
+}
+
+/**
+ * Watch, during the capture, for changes that could make suppressed content
+ * paint between the verification before and the one after it: anything added
+ * to, or any attribute changed on, a suppressed subtree or its ancestors, and
+ * removal of a suppression stylesheet. `collect` returns what changed.
+ */
+async function watchSuppressed(page: Page, collect: boolean): Promise<string[]> {
+  const changes: string[] = [];
+  for (const f of page.frames()) {
+    const r = await f
+      .evaluate(
+        ({ collect, hideAttr, id, key }) => {
+          const g = globalThis as Record<string, unknown>;
+          const k = `${key}watch`;
+          if (!collect) {
+            const roots: Array<Document | ShadowRoot> = [document];
+            for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
+            const records: MutationRecord[] = [];
+            const obs = new MutationObserver((rs) => records.push(...rs));
+            for (const root of roots) obs.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+            g[k] = { obs, records };
+            return [];
+          }
+          const w = g[k] as { obs: MutationObserver; records: MutationRecord[] } | undefined;
+          delete g[k];
+          if (!w) return ['the change watch was lost'];
+          w.records.push(...w.obs.takeRecords());
+          w.obs.disconnect();
+          const suppressedTrees = [...document.querySelectorAll(`[${hideAttr}]`)];
+          const relevant = (n: Node) => {
+            const e = n instanceof Element ? n : n.parentElement;
+            return !!e?.closest(`[${hideAttr}]`);
+          };
+          // Attributes of an ancestor can change which author rules apply inside; its other content cannot.
+          const ancestor = (n: Node) => n instanceof Element && suppressedTrees.some((t) => n !== t && n.contains(t));
+          const out: string[] = [];
+          for (const m of w.records) {
+            const removedOurs = [...m.removedNodes].some((x) => x instanceof HTMLStyleElement && x.id === id);
+            if (removedOurs) out.push('a suppression stylesheet was removed');
+            else if (m.type === 'attributes' && (relevant(m.target) || ancestor(m.target))) out.push(`attribute ${m.attributeName} changed on ${(m.target as Element).tagName.toLowerCase()}`);
+            else if (m.type !== 'attributes' && relevant(m.target)) out.push(`content changed in ${m.target.nodeName.toLowerCase()}`);
+          }
+          return [...new Set(out)];
+        },
+        { collect, hideAttr: HIDE_ATTR, id: HIDE_STYLE_ID, key: SAVED_KEY },
+      )
+      .catch((e: Error) => (f.isDetached() ? [] : [`the change watch failed: ${e.message.split('\n')[0]}`]));
+    changes.push(...r);
+  }
+  return changes;
 }
 
 export type SafeCapture = { ok: true; png: Buffer; masked: number } | { ok: false; withheld: string };
 
 /**
- * Capture an image only if safe masking can be established and verified on
- * pixels (see the module comment); otherwise withhold it and say why.
+ * Capture an image only if every sensitive element's paint can be shown to be
+ * suppressed in it; otherwise withhold it and say why (see the module comment).
  */
 export async function safeScreenshot(page: Page, o: PrivacyOptions & { fullPage?: boolean; extraMask?: Locator[]; stable?: boolean }): Promise<SafeCapture> {
   try {
@@ -290,24 +526,37 @@ export async function safeScreenshot(page: Page, o: PrivacyOptions & { fullPage?
     if (before.unsafe.length) return { ok: false, withheld: before.unsafe.join('; ') };
     const placed = await placeOverlays(page);
     if (placed.unsafe.length) return { ok: false, withheld: placed.unsafe.join('; ') };
-    const shoot = () =>
-      page.screenshot({ type: 'png', fullPage: o.fullPage ?? false, mask: [...sensitiveLocators(page), ...(o.extraMask ?? [])], maskColor: MASK_COLOR, animations: 'disabled', caret: 'hide', ...(o.stable ? { scale: 'css' as const } : {}) });
-    let png = await shoot();
-    if (before.marked > 0) {
-      // Pixel verification: with every sensitive element invisible, the image must be identical. A real leak is
-      // deterministic; a page still settling (late layout, repaint noise) is not, so a mismatch is re-checked on a
-      // fresh pair a bounded number of times before the image is withheld.
-      let diff: number | null = null;
-      for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt++) {
-        if (attempt > 0) png = await shoot();
-        await hideMarked(page, true);
-        const hidden = await shoot();
-        await hideMarked(page, false);
-        diff = differingPixels(png, hidden);
-        if (diff === 0) break;
+    const shoot = (caret: 'hide' | 'initial') =>
+      page.screenshot({ type: 'png', fullPage: o.fullPage ?? false, mask: [...sensitiveLocators(page), ...(o.extraMask ?? [])], maskColor: MASK_COLOR, animations: 'disabled', caret, ...(o.stable ? { scale: 'css' as const } : {}) });
+    let png: Buffer | null = null;
+    if (before.marked === 0) png = await shoot('hide');
+    else {
+      // The published image is the one taken while sensitive paint is suppressed — never an unsuppressed capture
+      // judged "close enough". Suppression is verified immediately before and after the capture, and the page is
+      // watched in between; anything unverified is retried a bounded number of times, then the image is withheld.
+      let problem = '';
+      for (let attempt = 0; attempt < SUPPRESS_ATTEMPTS && !png; attempt++) {
+        try {
+          await suppressMarked(page);
+          const pre = await verifySuppressed(page);
+          if (pre.length) {
+            problem = pre.join('; ');
+            continue;
+          }
+          await watchSuppressed(page, false);
+          const candidate = await shoot('initial');
+          const changed = await watchSuppressed(page, true);
+          const post = await verifySuppressed(page);
+          if (changed.length || post.length) {
+            problem = [...changed, ...post].join('; ');
+            continue;
+          }
+          png = candidate;
+        } finally {
+          await restoreMarked(page);
+        }
       }
-      if (diff === null) return { ok: false, withheld: 'the page changed size during capture' };
-      if (diff > 0) return { ok: false, withheld: `${diff} pixel(s) of sensitive content are painted outside their masks (overflow, transform, positioned or generated content)` };
+      if (!png) return { ok: false, withheld: `sensitive content could not be verified as suppressed in the capture: ${problem}` };
     }
     const after = await markSensitive(page, o);
     if (after.unsafe.length || after.newlyMarked > 0) return { ok: false, withheld: after.unsafe.length ? after.unsafe.join('; ') : `${after.newlyMarked} sensitive element(s) appeared during capture` };
