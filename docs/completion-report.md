@@ -145,7 +145,36 @@ The histories are in `docs/closure-report.md`, `reaudit-closure.md`, `review3-cl
 
 ## 5. Lanes on the final commit
 
-LANES_PLACEHOLDER
+The lanes below ran on commit `b68320f`. For every lane it was the first run, on a clean tree
+(`dirty: false`); nothing was re-run. The manifests are in
+`docs/evidence/completion/final-b68320f/`.
+
+| Lane | Baseline `524a8e9` | Final `b68320f` | Change |
+|---|---|---|---|
+| static | PASSED | PASSED | |
+| unit | 189 | **194**, 0 failed, 0 skipped | +5 onboarding checker |
+| e2e | 98 | **109**, 0 failed, 0 skipped | +8 C1 closed-root cases, +1 late host, +1 failed-attempt cleanup, +1 fixture closed-root export path |
+| service (PostgreSQL 16) | 49 | **49**, 0 failed, 0 skipped | |
+| audit | 30 | **37**, 0 failed, 0 skipped | +7 completion probes (4 for C1, 3 for C2) |
+| isolation | 16 | **32**, 0 failed, 0 skipped | +16 resource-contract cases (cgroup v1 locally, with `memsw`) |
+| scenario validation | ok | ok | |
+| live | BLOCKED: `QA_S1_API_KEY` | BLOCKED: `QA_S1_API_KEY` | not run; not counted as passing |
+| live_s2 | BLOCKED: `ANTHROPIC_API_KEY` | BLOCKED: `ANTHROPIC_API_KEY` | not run; not counted as passing |
+| deployment demo (Docker) | passed in CI | **PASSED**: clean promoted; defect held; worker crash held, then recovered | `docs/evidence/completion/demo/demo-flow.json` |
+
+**Totals:** 382 tests at the baseline and 421 now. No test was removed or skipped, and no assertion
+was weakened.
+
+**Configuration.**
+- Linux, root, Node v22.22.2.
+- Chromium 141 through Playwright 1.56.1.
+- PostgreSQL 16.13.
+- cgroup v1 (memory with `memsw`, and pids), with no host swap.
+- `DATABASE_URL` pointing at local PostgreSQL, and `QA_REQUIRE_SERVICE=1`.
+- No provider credentials.
+
+**Scope.** The local runs above are fixture evidence on one host. The GitHub CI run for the same
+commit uses cgroup v2 and is recorded in the pull request.
 
 ## 6. Plan coverage and blocked steps
 
