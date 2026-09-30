@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import type { CDPSession, Locator, Page } from '@playwright/test';
 
 /**
  * Pixel-level privacy for every image the system captures (re-audit R4,
@@ -37,6 +37,8 @@ import type { Locator, Page } from '@playwright/test';
 export const SENSITIVE_ATTR = 'data-qa-sensitive';
 const OVERLAY_ATTR = 'data-qa-mask-overlay';
 const BOX_ATTR = 'data-qa-mask-box';
+/** Host of a closed shadow root: its content cannot be read, so it is treated as sensitive as a whole. */
+const OPAQUE_ATTR = 'data-qa-opaque';
 const HIDE_STYLE_ID = 'qa-sensitive-hide';
 export const MASK_COLOR = '#FF00FF';
 /** Masked unless a policy says otherwise: content the page cannot inspect for secrets. */
@@ -146,7 +148,70 @@ export async function markSensitive(page: Page, o: PrivacyOptions): Promise<Mask
     plan.newlyMarked += r.newly;
     plan.marked += r.marked;
   }
+  // Closed shadow roots can hang off any element (a plain div or span too), and page script cannot see them:
+  // `shadowRoot === null` does not mean "no shadow content". They are inventoried through the DevTools protocol.
+  const opaque = await markOpaqueHosts(page);
+  if (opaque === null) plan.unsafe.push('closed shadow roots cannot be inventoried in this browser, so sensitive content inside them cannot be ruled out');
+  else {
+    plan.newlyMarked += opaque.newly;
+    plan.marked += opaque.newly;
+    plan.unsafe.push(...opaque.unsafe);
+  }
   return plan;
+}
+
+/**
+ * Chromium: find every closed shadow root in the page — whatever its host's
+ * tag, pre-existing, declarative or attached late, nested or not — in the main
+ * document, same-process frames and each out-of-process frame, and mark the
+ * outermost host reachable from page script as sensitive and opaque (its
+ * content cannot be read, so it cannot be shown to be free of secrets).
+ * Returns null when the browser has no DevTools protocol.
+ */
+async function markOpaqueHosts(page: Page): Promise<{ newly: number; unsafe: string[] } | null> {
+  const targets: Array<{ label: string; open: () => Promise<CDPSession> }> = [{ label: 'the page', open: () => page.context().newCDPSession(page) }];
+  for (const f of page.frames()) if (f !== page.mainFrame()) targets.push({ label: `frame ${f.url() || '(about:blank)'}`, open: () => page.context().newCDPSession(f) });
+  let newly = 0;
+  const unsafe: string[] = [];
+  for (const [i, t] of targets.entries()) {
+    let session: CDPSession;
+    try {
+      session = await t.open();
+    } catch (e) {
+      if (i === 0) return null; // no protocol at all (not Chromium)
+      continue; // a frame that is part of its parent's process, already covered by the page's document
+    }
+    try {
+      await session.send('DOM.enable');
+      const { root } = (await session.send('DOM.getDocument', { depth: -1, pierce: true })) as unknown as { root: ProtocolNode };
+      const hosts = new Set<number>();
+      const walk = (n: ProtocolNode, sealed: boolean) => {
+        for (const c of n.children ?? []) walk(c, sealed);
+        for (const sr of n.shadowRoots ?? []) {
+          if (sr.shadowRootType === 'closed' && !sealed) hosts.add(n.backendNodeId);
+          walk(sr, sealed || sr.shadowRootType !== 'open');
+        }
+        if (n.contentDocument) walk(n.contentDocument, sealed);
+      };
+      walk(root, false);
+      for (const backendNodeId of hosts) {
+        const { object } = (await session.send('DOM.resolveNode', { backendNodeId })) as { object: { objectId?: string } };
+        if (!object.objectId) throw new Error('a closed shadow root host could not be resolved');
+        const r = (await session.send('Runtime.callFunctionOn', {
+          objectId: object.objectId,
+          functionDeclaration: 'function (a, o) { this.setAttribute(o, ""); if (this.hasAttribute(a)) return 0; this.setAttribute(a, ""); return 1; }',
+          arguments: [{ value: SENSITIVE_ATTR }, { value: OPAQUE_ATTR }],
+          returnByValue: true,
+        })) as { result: { value?: number } };
+        newly += r.result.value ?? 0;
+      }
+    } catch (e) {
+      unsafe.push(`closed shadow roots in ${t.label} could not be inventoried: ${(e as Error).message.split('\n')[0]}`);
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  }
+  return { newly, unsafe };
 }
 
 /**
@@ -161,7 +226,7 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
   for (const frame of page.frames()) {
     const r = await frame
       .evaluate(
-        ({ attr, overlayAttr, boxAttr, color, max, pad }) => {
+        ({ attr, overlayAttr, boxAttr, opaqueAttr, color, max, pad }) => {
           const BOXED = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'IMG', 'CANVAS', 'VIDEO', 'AUDIO', 'IFRAME', 'FRAME', 'EMBED', 'OBJECT', 'SVG', 'svg', 'BR', 'HR', 'PICTURE', 'METER', 'PROGRESS']);
           const roots: Array<Document | ShadowRoot> = [document];
           for (let i = 0; i < roots.length; i++) for (const e of roots[i]!.querySelectorAll('*')) if ((e as HTMLElement).shadowRoot) roots.push((e as HTMLElement).shadowRoot!);
@@ -169,7 +234,7 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
           let n = 0;
           for (const e of marked) {
             const inSvg = e instanceof SVGElement;
-            const host = (e as HTMLElement).shadowRoot !== null || (e.tagName.includes('-') && customElements.get(e.tagName.toLowerCase()));
+            const host = (e as HTMLElement).shadowRoot !== null || e.hasAttribute(opaqueAttr) || (e.tagName.includes('-') && customElements.get(e.tagName.toLowerCase()));
             if (BOXED.has(e.tagName) || inSvg || host) {
               (inSvg ? (e as SVGElement).ownerSVGElement ?? e : e).setAttribute(boxAttr, '');
               continue;
@@ -202,7 +267,7 @@ async function placeOverlays(page: Page): Promise<{ overlays: number; unsafe: st
           }
           return { n, over: false };
         },
-        { attr: SENSITIVE_ATTR, overlayAttr: OVERLAY_ATTR, boxAttr: BOX_ATTR, color: MASK_COLOR, max: MAX_OVERLAYS, pad: OVERLAY_PAD },
+        { attr: SENSITIVE_ATTR, overlayAttr: OVERLAY_ATTR, boxAttr: BOX_ATTR, opaqueAttr: OPAQUE_ATTR, color: MASK_COLOR, max: MAX_OVERLAYS, pad: OVERLAY_PAD },
       )
       .catch((e: Error) => e);
     if (r instanceof Error) {
@@ -232,7 +297,7 @@ export async function unmarkSensitive(page: Page): Promise<void> {
             for (const a of attrs) root.querySelectorAll(`[${a}]`).forEach((e) => e.removeAttribute(a));
           }
         },
-        { attrs: [SENSITIVE_ATTR, BOX_ATTR], overlayAttr: OVERLAY_ATTR },
+        { attrs: [SENSITIVE_ATTR, BOX_ATTR, OPAQUE_ATTR], overlayAttr: OVERLAY_ATTR },
       )
       .catch(() => undefined);
   }
@@ -268,12 +333,12 @@ async function suppressMarked(page: Page): Promise<number> {
     const r = await f
       .evaluate(
         ({ attr, hideAttr, overlayAttr, id, key, pseudos }) => {
-          const saved = new Map<Element, string | null>();
+          const saved = new Map<Element, { attr: string | null; css: string }>();
           (globalThis as Record<string, unknown>)[key] = saved;
           const scopes = new Set<Document | ShadowRoot>();
           const hide = (e: Element) => {
             if (e.hasAttribute(overlayAttr) || e.hasAttribute(hideAttr)) return;
-            saved.set(e, e.getAttribute('style'));
+            saved.set(e, { attr: e.getAttribute('style'), css: (e as HTMLElement).style?.cssText ?? '' });
             e.setAttribute(hideAttr, '');
             const st = (e as HTMLElement | SVGElement).style;
             if (st) for (const [p, v] of [['visibility', 'hidden'], ['transition', 'none'], ['animation', 'none']] as const) st.setProperty(p, v, 'important');
@@ -328,12 +393,20 @@ async function restoreMarked(page: Page): Promise<void> {
       .evaluate(
         ({ hideAttr, id, key }) => {
           const g = globalThis as Record<string, unknown>;
-          const saved = g[key] as Map<Element, string | null> | undefined;
+          // A capture that failed between starting and collecting the change watch leaves its observer behind.
+          (g[`${key}watch`] as { obs: MutationObserver } | undefined)?.obs.disconnect();
+          delete g[`${key}watch`];
+          const saved = g[key] as Map<Element, { attr: string | null; css: string }> | undefined;
           delete g[key];
-          for (const [e, style] of saved ?? []) {
-            // Through the CSSOM, which a CSP that forbids setting style attributes still allows.
-            if (style === null) e.removeAttribute('style');
-            else (e as HTMLElement).style.cssText = style;
+          for (const [e, { attr, css }] of saved ?? []) {
+            // The attribute comes back byte for byte; where a CSP keeps an assigned style attribute from applying,
+            // the declarations are restored through the CSSOM, which such a policy still allows.
+            if (attr === null) e.removeAttribute('style');
+            else {
+              e.setAttribute('style', attr);
+              const st = (e as HTMLElement).style;
+              if (st && st.cssText !== css) st.cssText = css;
+            }
             e.removeAttribute(hideAttr);
           }
           const roots: Array<Document | ShadowRoot> = [document];
@@ -408,6 +481,7 @@ async function verifySuppressed(page: Page): Promise<string[]> {
 
 interface ProtocolNode {
   nodeId: number;
+  backendNodeId: number;
   nodeType: number;
   nodeName: string;
   pseudoType?: string;
@@ -552,6 +626,8 @@ export async function safeScreenshot(page: Page, o: PrivacyOptions & { fullPage?
             continue;
           }
           png = candidate;
+        } catch (e) {
+          problem = `capture attempt failed: ${(e as Error).message.split('\n')[0]}`;
         } finally {
           await restoreMarked(page);
         }

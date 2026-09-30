@@ -1,0 +1,129 @@
+
+ RUN  v3.2.7 /home/user/JEV-BA
+
+ ❯ tests/e2e/pixel-privacy.test.ts (31 tests | 10 failed | 20 skipped) 20693ms
+   ↓ pixel privacy (re-audit R4) > masks a secret in ordinary text, form values, expanded details, frames, split and transformed text and uninspectable content
+   ↓ pixel privacy (re-audit R4) > withholds the image when a secret appears during capture
+   ↓ pixel privacy (re-audit R4) > withholds the image when the page keeps changing sensitive content during the suppressed capture (review-4)
+   ↓ pixel privacy (re-audit R4) > publishes traces without image resources: a secret painted into an image is omitted, not trusted to byte redaction
+   ↓ pixel privacy (re-audit R4) > every image a real attempt exports, and the image sent to System Two, masks a fixture secret shown on the page
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > ::after literal content is masked or the image is withheld; nothing sensitive is visible in an accepted image
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a positioned descendant far outside its parent is masked or the image is withheld; nothing sensitive is visible in an accepted image
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a rotated ancestor is masked or the image is withheld; nothing sensitive is visible in an accepted image
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a far text-shadow (paint the masks cannot know about) is masked or the image is withheld; nothing sensitive is visible in an accepted image
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > an ID-specific !important visibility rule on a pseudo-element: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > an inline !important visibility on the element: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > an !important visibility on a descendant class: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > !important rules in the page's own cascade layer: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > a visibility transition: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > low-contrast glyphs (rgb 245 on white): no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > near-transparent glyphs (opacity 0.03): no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > a CSP that blocks injected style elements: no secret pixel is published
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > suppression cannot be defeated by the page (review-4 P4a/P4b) > a closed shadow root that re-shows its content: no secret pixel is published
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a div host: no secret pixel is published 402ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a span host: no secret pixel is published 375ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a declarative closed root: no secret pixel is published 326ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a root nested in an open root: no secret pixel is published 332ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a root nested in a closed root: no secret pixel is published 369ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a same-origin frame: no secret pixel is published 323ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   ✓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a cross-origin (out-of-process) frame: no secret pixel is published  363ms
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a closed root that re-shows its content with !important: no secret pixel is published 276ms
+     → secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a host that appears after navigation is found on the new document 387ms
+     → the late closed-root host is marked: expected 0 to be greater than 0
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a failed capture attempt leaves no marks, sheets, observers or changed markup behind (completion C1) 86ms
+     → capture failed: injected capture failure: expected false to be true // Object.is equality
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a fixture secret shown as generated content is masked in evidence, visual candidates and diffs, and the S2 image
+   ↓ pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a fixture secret shown as overflow content is masked in evidence, visual candidates and diffs, and the S2 image
+   × pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a fixture secret shown as closed content is masked in evidence, visual candidates and diffs, and the S2 image 17313ms
+     → cases/notes_crud/chromium_desktop/notes_crud.chromium_desktop.a1.d2aecf/00-note_created.png: expected 595 to be +0 // Object.is equality
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a div host: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a span host: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a declarative closed root: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a root nested in an open root: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a root nested in a closed root: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a same-origin frame: no secret pixel is published
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a closed root that re-shows its content with !important: no secret pixel is published
+AssertionError: secret pixels not replaced by the sanitized rendering: expected 2693 to be +0 // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 2693[39m
+
+ ❯ tests/e2e/pixel-privacy.test.ts:342:89
+    340|               return !asBlank && !masked;
+    341|             });
+    342|             expect(bad.length, 'secret pixels not replaced by the sani…
+       |                                                                                         ^
+    343|           }
+    344|           expect(shot.ok ? 'accepted' : `withheld: ${shot.withheld}`).…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > closed shadow roots on any host (completion C1) > a host that appears after navigation is found on the new document
+AssertionError: the late closed-root host is marked: expected 0 to be greater than 0
+ ❯ tests/e2e/pixel-privacy.test.ts:360:81
+    358|           await page.waitForTimeout(200);
+    359|           const shot = await safeScreenshot(page, { secrets: [TOKEN] }…
+    360|           expect(shot.ok && shot.masked, 'the late closed-root host is…
+       |                                                                                 ^
+    361|         } finally {
+    362|           await page.close();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a failed capture attempt leaves no marks, sheets, observers or changed markup behind (completion C1)
+AssertionError: capture failed: injected capture failure: expected false to be true // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+ ❯ tests/e2e/pixel-privacy.test.ts:389:55
+    387|         }) as Page['screenshot'];
+    388|         const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+    389|         expect(shot.ok, shot.ok ? '' : shot.withheld).toBe(true);
+       |                                                       ^
+    390|         expect(calls).toBe(2);
+    391|         expect(await page.evaluate(() => document.documentElement.oute…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  tests/e2e/pixel-privacy.test.ts > pixel privacy (re-audit R4) > painted extent and generated content (review-3 N1) > a fixture secret shown as closed content is masked in evidence, visual candidates and diffs, and the S2 image
+AssertionError: cases/notes_crud/chromium_desktop/notes_crud.chromium_desktop.a1.d2aecf/00-note_created.png: expected 595 to be +0 // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 595[39m
+
+ ❯ tests/e2e/pixel-privacy.test.ts:411:94
+    409|         const events = await readFile(join(r1.runDir, r1.report.cases[…
+    410|         expect(shots.length + (events.match(/withheld/g)?.length ?? 0)…
+    411|         for (const s of shots) expect(band(await readFile(join(r1.runD…
+       |                                                                                              ^
+    412| 
+    413|         // Visual checkpoint candidate, then (after approval) a diff a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  10 failed | 1 passed | 20 skipped (31)
+   Start at  23:07:51
+   Duration  22.86s (transform 793ms, setup 0ms, collect 1.85s, tests 20.69s, environment 0ms, prepare 69ms)
+

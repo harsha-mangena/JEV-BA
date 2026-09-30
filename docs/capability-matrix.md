@@ -12,7 +12,7 @@ passed.
 | Keyboard (`press`) | ✅ | ❌ | Tab/Shift+Tab/Enter/Space/Escape/arrows |
 | Scroll | — | ✅ | Effect-free, budgeted, loop-detected |
 | Upload, drag, canvas | ❌ | ❌ | Out of scope |
-| Open shadow DOM | ✅ (Playwright locators) | ✅ | Extracted and actionable; closed roots are invisible by design |
+| Open shadow DOM | ✅ (Playwright locators) | ✅ | Extracted and actionable; closed roots are not extracted, and for screenshots every closed root (any host) is treated as opaque sensitive content |
 | iframes | ❌ | ❌ | Counted in coverage; a decision blocked by frame-only content ends `unsupported_capability`; frames are inspected (same-origin) or masked (cross-origin) in images |
 | UI assertions (visible/hidden/text/url/focus) | ✅ | ✅ | Strict: ambiguous locators fail |
 | Backend oracles (entity deltas, integer totals) | ✅ | ✅ | Via the fixture service; unavailable in read-only profile |
@@ -30,6 +30,6 @@ passed.
 | Durable intents and reconciliation | ✅ | ✅ | PREPARED/DISPATCHING persisted before input; keyed effects (fixture-shop: `checkout.submit`, `cart.add`) reconciled from the application after crashes, including acknowledged-but-unconfirmed ones; anything unverifiable is an obligation that holds the gate until adjudicated; cases with open obligations are never replayed |
 | Execution contract | ✅ | ✅ | Suite, environment policy, oracle adapter/endpoint, version verification, frozen baselines, browser builds; re-checked at execution, aggregation and promotion |
 | Deployment lineage | ✅ | — | Single or per-channel (e.g. PR previews); provider-ordered or arrival-ordered; serialized generations and promotion consumption |
-| Pixel privacy | ✅ | ✅ (S2 images) | Secrets in rendered text/values/generated content, declared selectors and uninspectable content masked over their full painted extent; the published image is taken with that content's paint suppressed and verified hidden (author `!important` rules, CSP, closed/UA shadow trees in Chromium), else withheld; no pixel-difference tolerance; traces published without images |
-| Generated-spec validation | ✅ (namespace sandbox) | — | Linux user namespaces and a delegated kernel cgroup (memory limit; validated filesystem, limits and membership) required; no host fallback |
+| Pixel privacy | ✅ | ✅ (S2 images) | Secrets in rendered text/values/generated content, declared selectors and uninspectable content masked over their full painted extent; the published image is taken with that content's paint suppressed and verified hidden (author `!important` rules, CSP, closed/UA shadow trees in Chromium), else withheld; closed roots on any host inventoried via DevTools protocol; Firefox/WebKit withhold every screenshot; no pixel-difference tolerance; traces published without images; masked values need a backend/UI oracle |
+| Generated-spec validation | ✅ (namespace sandbox) | — | Linux user namespaces and a delegated kernel cgroup (memory and swap bound, process cap; validated filesystem, read-back limits and membership) required; no host fallback — see deploy/README.md "Sandbox resource contract" |
 | Autonomy modes | — | shadow (default), heuristic staging, calibrated | Calibrated only for a qualified, unexpired, unrevoked profile (`qa qualify`, `qa qualification renew|revoke`), re-checked at every decision; otherwise shadow |

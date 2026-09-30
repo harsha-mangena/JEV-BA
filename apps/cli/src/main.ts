@@ -1,9 +1,11 @@
 #!/usr/bin/env -S npx tsx
 import { randomBytes } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
+import { parse as parseYaml } from 'yaml';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  checkOnboarding,
   ContractError,
   ExecutionProfileId,
   loadFixtureCatalog,
@@ -66,6 +68,8 @@ Service commands (need DATABASE_URL):
   serve-api                Run the control API (--port).
   serve-worker             Run a job worker (--out). Both servers refuse to start when a startup check fails.
   doctor                   Run the startup checks for --role api|worker and exit non-zero on any failure.
+  onboarding-check         Check a target onboarding manifest (--manifest <file>): exit 0 READY, 3 BLOCKED on
+                           owner inputs still missing (each named), 1 INVALID.
 
 System One:
   s1 probe                 Validate the live provider contract (QA_S1_PROVIDER, QA_S1_ENDPOINT, QA_S1_MODEL, QA_S1_API_KEY).
@@ -139,6 +143,7 @@ const { positionals, values } = parseArgs({
     port: { type: 'string' },
     host: { type: 'string' },
     'api-url': { type: 'string' },
+    manifest: { type: 'string' },
     'github-event': { type: 'string' },
     provider: { type: 'string' },
     'candidate-url': { type: 'string' },
@@ -288,6 +293,14 @@ async function main(): Promise<number> {
       return svc.bootstrap(values);
     case 'doctor':
       return svc.doctor(values);
+    case 'onboarding-check': {
+      const file = values.manifest ?? fail('--manifest <file> is required');
+      const raw = parseYaml(await readFile(file, 'utf8'));
+      const r = await checkOnboarding(raw, (p) => access(resolve(p)).then(() => true, () => false));
+      for (const i of r.items) console.log(`${i.state.padEnd(8)} ${i.input}${i.use ? `  (${i.use})` : ''}${i.detail ? ` — ${i.detail}` : ''}`);
+      console.log(r.status);
+      return r.status === 'READY' ? 0 : r.status === 'BLOCKED' ? 3 : 1;
+    }
     case 'serve-api':
       return svc.serveApi(values);
     case 'serve-worker':

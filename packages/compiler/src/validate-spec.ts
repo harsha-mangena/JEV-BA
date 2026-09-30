@@ -26,6 +26,11 @@ export const GENERATED_SPEC_MEMORY_BYTES = 2048 * 1024 * 1024;
 export async function validateGeneratedSpec(source: string, o: { workDir: string; baseUrl: string; fixtureToken: string; timeoutMs?: number; memoryBytes?: number }): Promise<SpecValidation> {
   const lint = lintGeneratedSpec(source);
   if (lint.length) return { status: 'rejected', detail: lint.join('; '), lint };
+  // The memory limit is configuration, not a hint: an unusable value is an error, never a silent default.
+  const envLimit = process.env.QA_SANDBOX_MEMORY_MB;
+  if (o.memoryBytes === undefined && envLimit !== undefined && envLimit !== '' && !/^[1-9][0-9]*$/.test(envLimit)) return { status: 'error', detail: `invalid QA_SANDBOX_MEMORY_MB ${JSON.stringify(envLimit)}: a positive whole number of MiB is required`, lint };
+  const memoryBytes = o.memoryBytes ?? (envLimit ? Number(envLimit) * 1024 * 1024 : GENERATED_SPEC_MEMORY_BYTES);
+  if (!Number.isSafeInteger(memoryBytes) || memoryBytes <= 0) return { status: 'error', detail: `invalid memory limit ${memoryBytes}: a positive whole number of bytes is required`, lint };
   const sandbox = await sandboxAvailable();
   if (!sandbox.ok) return { status: 'error', detail: `sandbox unavailable; generated code is never run on the host: ${sandbox.detail}`, lint };
 
@@ -53,7 +58,7 @@ export async function validateGeneratedSpec(source: string, o: { workDir: string
     env: { QA_BASE_URL: insideBase, QA_FIXTURE_TOKEN: o.fixtureToken, PLAYWRIGHT_BROWSERS_PATH: browsers },
     allowTcp: { host: LOOPBACK.has(target.hostname) ? '127.0.0.1' : target.hostname, port },
     timeoutMs: o.timeoutMs ?? 120_000,
-    limits: { memoryBytes: o.memoryBytes ?? (Number(process.env.QA_SANDBOX_MEMORY_MB) > 0 ? Number(process.env.QA_SANDBOX_MEMORY_MB) * 1024 * 1024 : GENERATED_SPEC_MEMORY_BYTES) },
+    limits: { memoryBytes },
   });
   if (r.status === 'unavailable') return { status: 'error', detail: `sandbox could not start: ${r.stderr.slice(0, 300)}`, lint };
   if (r.exceeded === 'memory') return { status: 'error', detail: `exceeded the sandbox memory limit; process tree killed`, lint };

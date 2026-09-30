@@ -1,0 +1,27 @@
+{
+  "lane": "static",
+  "status": "PASSED",
+  "code_sha": "524a8e96cb98c89c99e265a9836682c09ee4cda5",
+  "dirty": false,
+  "command": "npx tsc -p tsconfig.json --noEmit",
+  "exit_code": 0,
+  "started_at": "2026-09-30T22:58:52.588Z",
+  "finished_at": "2026-09-30T22:59:11.481Z",
+  "environment": {
+    "node": "v22.22.2",
+    "platform": "linux-x64",
+    "ci": false,
+    "database": "configured",
+    "require_service": true
+  },
+  "dependencies": {
+    "playwright": "1.56.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "postgres": "psql (PostgreSQL) 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)"
+  },
+  "requires": [],
+  "counts": null,
+  "skipped": [],
+  "digest": "843fc6fc945e6d27faefaa02240629755cdd32677e231b4351f1ce3523e2b52c"
+}

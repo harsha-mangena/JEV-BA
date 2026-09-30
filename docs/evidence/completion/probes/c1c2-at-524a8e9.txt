@@ -1,0 +1,103 @@
+
+ RUN  v3.2.7 /home/user/JEV-BA
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > div host: the image is withheld or the secret's pixels are sanitized
+COMPLETION C1-div {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":0,"unsanitized_glyph_pixels":2677}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > span host: the image is withheld or the secret's pixels are sanitized
+COMPLETION C1-span {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":0,"unsanitized_glyph_pixels":2677}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: the same host declared as a sensitive selector is sanitized
+COMPLETION C1-selector-control {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: a registered custom-element host (already covered) is sanitized
+COMPLETION C1-custom-element-control {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > control: on this host a valid cgroup is created and the program runs
+COMPLETION C2-control {"version":1,"status":"exited","ran":true,"stderr":""}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a denied write of the swap bound refuses execution (fail closed)
+COMPLETION C2-swap-write-denied {"version":1,"control":"memory\\.memsw\\.limit_in_bytes$","status":"exited","ran":true,"stderr":""}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a swap bound that reads back weaker than requested refuses execution
+COMPLETION C2-swap-readback-mismatch {"version":1,"control":"memory\\.memsw\\.limit_in_bytes$","status":"exited","ran":true,"stderr":""}
+
+ ❯ tests/audit/completion.test.ts (7 tests | 4 failed) 1906ms
+   × C1: a secret inside a closed shadow root on an ordinary HTML host > div host: the image is withheld or the secret's pixels are sanitized 357ms
+     → secret pixels in an accepted image: expected 2677 to be +0 // Object.is equality
+   × C1: a secret inside a closed shadow root on an ordinary HTML host > span host: the image is withheld or the secret's pixels are sanitized 275ms
+     → secret pixels in an accepted image: expected 2677 to be +0 // Object.is equality
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: the same host declared as a sensitive selector is sanitized 278ms
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: a registered custom-element host (already covered) is sanitized 281ms
+   ✓ C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > control: on this host a valid cgroup is created and the program runs 198ms
+   × C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a denied write of the swap bound refuses execution (fail closed) 189ms
+     → the program must not run when the swap bound could not be set: expected true to be false // Object.is equality
+   × C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a swap bound that reads back weaker than requested refuses execution 197ms
+     → the program must not run under an unverified swap bound: expected true to be false // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > div host: the image is withheld or the secret's pixels are sanitized
+ FAIL  tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > span host: the image is withheld or the secret's pixels are sanitized
+AssertionError: secret pixels in an accepted image: expected 2677 to be +0 // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 2677[39m
+
+ ❯ tests/audit/completion.test.ts:110:80
+    108|       expect(r.glyph_pixels, 'control: the secret really paints').toBe…
+    109|       expect(r.light_dom_has_secret, 'the secret is only inside the cl…
+    110|       expect(r.unsanitized_glyph_pixels, 'secret pixels in an accepted…
+       |                                                                                ^
+    111|     });
+    112|   }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a denied write of the swap bound refuses execution (fail closed)
+AssertionError: the program must not run when the swap bound could not be set: expected true to be false // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- false[39m
+[31m+ true[39m
+
+ ❯ tests/audit/completion.test.ts:166:84
+    164|     const r = await dispatch('swap-denied');
+    165|     evidence('C2-swap-write-denied', { version, control: file.source, …
+    166|     expect(r.ran, 'the program must not run when the swap bound could …
+       |                                                                                    ^
+    167|     expect(r.status).toBe('unavailable');
+    168|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a swap bound that reads back weaker than requested refuses execution
+AssertionError: the program must not run under an unverified swap bound: expected true to be false // Object.is equality
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- false[39m
+[31m+ true[39m
+
+ ❯ tests/audit/completion.test.ts:175:78
+    173|     const r = await dispatch('swap-mismatch');
+    174|     evidence('C2-swap-readback-mismatch', { version, control: file.sou…
+    175|     expect(r.ran, 'the program must not run under an unverified swap b…
+       |                                                                              ^
+    176|     expect(r.status).toBe('unavailable');
+    177|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 3 passed (7)
+   Start at  23:02:41
+   Duration  3.93s (transform 446ms, setup 0ms, collect 1.69s, tests 1.91s, environment 0ms, prepare 65ms)
+

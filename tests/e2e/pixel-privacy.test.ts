@@ -283,7 +283,119 @@ describe('pixel privacy (re-audit R4)', () => {
       });
     });
 
-    it.each([['generated'], ['overflow']] as const)('a fixture secret shown as %s content is masked in evidence, visual candidates and diffs, and the S2 image', async (mode) => {
+    describe('closed shadow roots on any host (completion C1)', () => {
+      // The secret lives only inside a closed shadow root, which page script cannot see from its host. An accepted
+      // image must show, at every pixel the secret paints, exactly what the page shows without it (or the mask).
+      const far = 'position:absolute;left:260px;top:0;white-space:nowrap';
+      const serve = async (page: Page, pages: Record<string, string>) => {
+        await page.route(/^http:\/\/(c1|x1)\.test\//, (route) => {
+          const u = new URL(route.request().url());
+          const body = pages[`${u.host}${u.pathname}`];
+          return body === undefined ? route.fulfill({ status: 404, body: '' }) : route.fulfill({ status: 200, contentType: 'text/html', body });
+        });
+      };
+      const doc = (body: string) => `<!doctype html><html><head></head><body style="margin:0;font:28px sans-serif;background:#fff;color:#000"><h1 id="ok" style="margin:8px;font-size:18px">Order summary</h1>${body}</body></html>`;
+      // The secret is put in after load by the test harness, so it is never in markup, attributes or script text.
+      type Inject = (page: Page, secret: string) => Promise<unknown>;
+      const inFrame = (i: number, fn: (a: { far: string; t: string }) => void): Inject => (page, t) => page.frames()[i]!.evaluate(fn, { far, t });
+      const box = 'position:relative;display:inline-block;margin:20px;width:16px;height:24px';
+      const frameDoc = `<!doctype html><body style="margin:0;font:28px sans-serif;background:#fff;color:#000"><div id="h" style="${box}"></div></body>`;
+      const cases: Array<[string, Record<string, string>, Inject, 'accepted' | 'withheld']> = [
+        ['a div host', { 'c1.test/': doc(`<div id="h" style="${box}"></div>`) }, inFrame(0, ({ far, t }) => { const r = document.getElementById('h')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a span host', { 'c1.test/': doc(`<span id="h" style="${box}"></span>`) }, inFrame(0, ({ far, t }) => { const r = document.getElementById('h')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a declarative closed root', {}, async () => undefined, 'accepted'],
+        ['a root nested in an open root', { 'c1.test/': doc('<div id="o" style="margin:20px"></div>') }, inFrame(0, ({ far, t }) => { const o = document.getElementById('o')!.attachShadow({ mode: 'open' }); o.innerHTML = '<div id="i" style="position:relative;width:16px;height:24px"></div>'; const r = o.getElementById('i')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a root nested in a closed root', { 'c1.test/': doc('<div id="o" style="margin:20px"></div>') }, inFrame(0, ({ far, t }) => { const o = document.getElementById('o')!.attachShadow({ mode: 'closed' }); o.innerHTML = '<div id="i" style="position:relative;width:16px;height:24px"></div>'; const r = o.getElementById('i')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a same-origin frame', { 'c1.test/': doc('<iframe src="/f" style="border:0;width:800px;height:60px"></iframe>'), 'c1.test/f': frameDoc }, inFrame(1, ({ far, t }) => { const r = document.getElementById('h')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a cross-origin (out-of-process) frame', { 'c1.test/': doc('<iframe src="http://x1.test/f" style="border:0;width:800px;height:60px"></iframe>'), 'x1.test/f': frameDoc }, inFrame(1, ({ far, t }) => { const r = document.getElementById('h')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'accepted'],
+        ['a closed root that re-shows its content with !important', { 'c1.test/': doc(`<div id="h" style="${box}"></div>`) }, inFrame(0, ({ far, t }) => { const r = document.getElementById('h')!.attachShadow({ mode: 'closed' }); r.innerHTML = `<style>span{visibility:visible!important}</style><span style="${far}"></span>`; r.querySelector('span')!.textContent = t; }), 'withheld'],
+      ];
+      it.each(cases)('%s: no secret pixel is published', async (name, pages, inject, expected) => {
+        const load = async (secret: string) => {
+          const p = await browser.newPage({ viewport: { width: 900, height: 240 } });
+          // Declarative shadow roots exist only as parsed markup; their template is gone from the DOM after parsing.
+          await serve(p, name === 'a declarative closed root' ? { 'c1.test/': doc(`<div style="${box}"><template shadowrootmode="closed"><span style="${far}">${secret}</span></template></div>`) } : pages);
+          await p.goto('http://c1.test/');
+          await p.waitForLoadState('load');
+          if (secret) await inject(p, secret);
+          else await inject(p, '');
+          return p;
+        };
+        const blankPage = await load('');
+        const blank = PNG.sync.read(await blankPage.screenshot({ type: 'png', animations: 'disabled', caret: 'hide' }));
+        await blankPage.close();
+        const page = await load(TOKEN);
+        try {
+          const raw = PNG.sync.read(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide' }));
+          const glyph: number[] = [];
+          for (let i = 0; i < raw.data.length; i += 4) if (raw.data[i] !== blank.data[i] || raw.data[i + 1] !== blank.data[i + 1] || raw.data[i + 2] !== blank.data[i + 2]) glyph.push(i);
+          expect(glyph.length, 'control: the secret really paints in an ordinary capture').toBeGreaterThan(200);
+          expect(await page.evaluate((t) => document.documentElement.outerHTML.includes(t) || document.body.innerText.includes(t), TOKEN), 'the secret is not visible to page script').toBe(false);
+          const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+          if (shot.ok) {
+            const out = PNG.sync.read(shot.png);
+            const bad = glyph.filter((i) => {
+              const asBlank = out.data[i] === blank.data[i] && out.data[i + 1] === blank.data[i + 1] && out.data[i + 2] === blank.data[i + 2];
+              const masked = Math.abs(out.data[i]! - R) < 8 && Math.abs(out.data[i + 1]! - G) < 8 && Math.abs(out.data[i + 2]! - B) < 8;
+              return !asBlank && !masked;
+            });
+            expect(bad.length, 'secret pixels not replaced by the sanitized rendering').toBe(0);
+          }
+          expect(shot.ok ? 'accepted' : `withheld: ${shot.withheld}`).toMatch(expected === 'accepted' ? /^accepted$/ : /^withheld: .*could not be verified as suppressed/);
+          expect(await page.evaluate(() => document.querySelectorAll('[data-qa-sensitive],[data-qa-opaque],[data-qa-suppressed],[data-qa-mask-overlay],style#qa-sensitive-hide').length)).toBe(0);
+        } finally {
+          await page.close();
+        }
+      });
+
+      it('a host that appears after navigation is found on the new document', async () => {
+        const page = await browser.newPage({ viewport: { width: 900, height: 240 } });
+        try {
+          await serve(page, { 'c1.test/': doc('<p>first page</p>'), 'c1.test/next': doc(`<div id="h" style="position:relative;margin:20px;width:16px;height:24px"></div><script>setTimeout(() => document.getElementById('h').attachShadow({ mode: 'closed' }).innerHTML = ${JSON.stringify(`<span style="${far}">${TOKEN}</span>`)}, 50)</script>`) });
+          await page.goto('http://c1.test/');
+          expect((await safeScreenshot(page, { secrets: [TOKEN] })).ok).toBe(true);
+          await page.goto('http://c1.test/next');
+          await page.waitForTimeout(200);
+          const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+          expect(shot.ok && shot.masked, 'the late closed-root host is marked').toBeGreaterThan(0);
+        } finally {
+          await page.close();
+        }
+      });
+    });
+
+    it('a failed capture attempt leaves no marks, sheets, observers or changed markup behind (completion C1)', async () => {
+      const page = await browser.newPage();
+      try {
+        await page.addInitScript(() => {
+          const Orig = window.MutationObserver;
+          const live = new Set<MutationObserver>();
+          (window as unknown as { __live: Set<MutationObserver> }).__live = live;
+          window.MutationObserver = class extends Orig {
+            override observe(t: Node, o?: MutationObserverInit) { live.add(this); return super.observe(t, o); }
+            override disconnect() { live.delete(this); return super.disconnect(); }
+          };
+        });
+        await page.goto('data:text/html,<p id="x" style="color:red;width:300px">token SECRET_PLACEHOLDER</p><div id="h"></div>'.replace('SECRET_PLACEHOLDER', TOKEN));
+        await page.evaluate(() => document.getElementById('h')!.attachShadow({ mode: 'closed' }).innerHTML = '<b>opaque</b>');
+        const before = await page.evaluate(() => document.documentElement.outerHTML);
+        const orig = page.screenshot.bind(page);
+        let calls = 0;
+        page.screenshot = (async (o: Parameters<Page['screenshot']>[0]) => {
+          if (calls++ === 0) throw new Error('injected capture failure');
+          return orig(o);
+        }) as Page['screenshot'];
+        const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+        expect(shot.ok, shot.ok ? '' : shot.withheld).toBe(true);
+        expect(calls).toBe(2);
+        expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(before);
+        expect(await page.evaluate(() => ({ live: (window as unknown as { __live: Set<unknown> }).__live.size, sheets: document.adoptedStyleSheets.length, keys: Object.keys(globalThis).filter((k) => k.startsWith('__qaPrivacy')) }))).toEqual({ live: 0, sheets: 0, keys: [] });
+      } finally {
+        await page.close();
+      }
+    });
+
+    it.each([['generated'], ['overflow'], ['closed']] as const)('a fixture secret shown as %s content is masked in evidence, visual candidates and diffs, and the S2 image', async (mode) => {
       const band = (png: Buffer) => {
         const { width, height } = PNG.sync.read(png);
         return dark(png, { x: width - 360, y: height - 48, width: 360, height: 48 });

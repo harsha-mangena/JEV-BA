@@ -1,0 +1,17 @@
+# Target onboarding manifest (docs/target-onboarding.md). Every `null` is an input the
+# application owner has not supplied yet; `qa onboarding-check` reports each one as BLOCKED.
+# Do not fill fields from the application's current behaviour: they are the owner's contract.
+schema_version: 1
+application:
+  name: "<application name>"
+  owner_contact: null        # who supplies and approves the inputs below
+source: null                 # { repository: owner/name, provider: github|vercel|pipeline|manual, environment, channel: single|per_channel }
+candidate: null              # { url_pattern: https://*.example.app, revision_endpoint: { kind: json, path: /version, field: sha } }
+journeys: null               # [ { id, roles: [..], scenario_file: specs/..., expectations_approved_by } ]
+identities: null             # { fixture_api_url, fixture_token_env: TARGET_FIXTURE_TOKEN, roles: [ { role, fixture } ] }
+mutations: null              # [ { binding, idempotency_key, effect_lookup } ]
+backend_oracles: null        # [ { id, verifies, endpoint_env: TARGET_ORACLE_URL } ]
+cleanup: null                # { rules: [..], external_sandboxes: [..] }
+profiles: null               # { browsers: [chromium], viewports: [1280x800], locales: [en-US], native_devices: [], visual_checkpoints: [] }
+artifacts: null              # { retention_days: 30, model_sharing: none|text_only|sanitized_images }
+promotion: null              # { controller: <name>, access_env: TARGET_PROMOTION_TOKEN, required_check: true }
