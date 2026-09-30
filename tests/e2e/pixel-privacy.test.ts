@@ -114,6 +114,25 @@ describe('pixel privacy (re-audit R4)', () => {
     }
   });
 
+  it('withholds the image when the page keeps changing sensitive content during the suppressed capture (review-4)', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent(`<p id="x">token ${TOKEN}</p>`);
+      const orig = page.screenshot.bind(page);
+      let calls = 0;
+      page.screenshot = (async (o: Parameters<Page['screenshot']>[0]) => {
+        calls++;
+        await page.evaluate(() => document.getElementById('x')!.setAttribute('class', `c${Math.random()}`));
+        return orig(o);
+      }) as Page['screenshot'];
+      const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+      expect(shot).toMatchObject({ ok: false, withheld: expect.stringMatching(/could not be verified as suppressed.*attribute class changed/) });
+      expect(calls, 'retried a bounded number of times').toBe(3);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('publishes traces without image resources: a secret painted into an image is omitted, not trusted to byte redaction', async () => {
     const page = await browser.newPage();
     let png: Buffer;
@@ -214,6 +233,54 @@ describe('pixel privacy (re-audit R4)', () => {
       } finally {
         await page.close();
       }
+    });
+
+    describe('suppression cannot be defeated by the page (review-4 P4a/P4b)', () => {
+      // Each secret paints outside every box the overlays cover, so only verified suppression keeps it out of the
+      // published image. Leak = a pixel the secret paints (the page with vs. without it) reproduced exactly.
+      const far = 'position:absolute;left:260px;top:0;white-space:nowrap';
+      const host = (inner: string, style = '') => `<div id="x" data-v="${TOKEN}" style="position:relative;width:16px;height:24px;margin:20px;${style}">${inner}</div>`;
+      const cases: Array<[string, string, 'accepted' | 'withheld']> = [
+        ['an ID-specific !important visibility rule on a pseudo-element', `<style>#x::before{content:attr(data-v);${far};visibility:visible!important}</style>${host('')}`, 'accepted'],
+        ['an inline !important visibility on the element', host(`<span style="${far}">${TOKEN}</span>`, 'visibility:visible!important'), 'accepted'],
+        ['an !important visibility on a descendant class', `<style>.v{visibility:visible!important}</style>${host(`<span class="v" style="${far}">${TOKEN}</span>`)}`, 'accepted'],
+        ['!important rules in the page\'s own cascade layer', `<style>@layer base{#x::after{content:attr(data-v);${far};visibility:visible!important}}</style>${host('')}`, 'accepted'],
+        ['a visibility transition', `<style>#x,#x *{transition:visibility 60s}</style>${host(`<span style="${far}">${TOKEN}</span>`)}`, 'accepted'],
+        ['low-contrast glyphs (rgb 245 on white)', `<style>#x::before{content:attr(data-v);${far};color:rgb(245,245,245)}</style>${host('')}`, 'accepted'],
+        ['near-transparent glyphs (opacity 0.03)', `<style>#x::before{content:attr(data-v);${far};opacity:0.03}</style>${host('')}`, 'accepted'],
+        ['a CSP that blocks injected style elements', `<meta http-equiv="Content-Security-Policy" content="style-src 'nonce-n1'"><style nonce="n1">#x::before{content:attr(data-v);${far};visibility:visible!important}</style>${host('')}`, 'accepted'],
+        ['a closed shadow root that re-shows its content', `${host('')}<x-sealed id="s" style="display:block;position:relative;width:16px;height:24px;margin:20px"></x-sealed><script>customElements.define('x-sealed', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = '<style>span{visibility:visible!important}</style><span style="${far}">${TOKEN}</span>'; } });</script>`, 'withheld'],
+      ];
+      it.each(cases)('%s: no secret pixel is published', async (_name, html, expected) => {
+        const page = await browser.newPage({ viewport: { width: 900, height: 240 } });
+        try {
+          const doc = (body: string) => `<!doctype html><html><head></head><body style="margin:0;font:28px sans-serif;background:#fff;color:#000"><h1 id="ok" style="margin:8px;font-size:18px">Order summary</h1>${body}</body></html>`;
+          const other = await browser.newPage({ viewport: { width: 900, height: 240 } });
+          await other.setContent(doc(html.split(TOKEN).join('')));
+          const blank = PNG.sync.read(await other.screenshot({ type: 'png', animations: 'disabled', caret: 'hide' }));
+          await other.close();
+          await page.setContent(doc(html));
+          const styleBefore = await page.evaluate(() => document.getElementById('x')!.style.cssText);
+          const raw = PNG.sync.read(await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide' }));
+          const glyph: number[] = [];
+          for (let i = 0; i < raw.data.length; i += 4) if (raw.data[i] !== blank.data[i] || raw.data[i + 1] !== blank.data[i + 1] || raw.data[i + 2] !== blank.data[i + 2]) glyph.push(i);
+          expect(glyph.length, 'control: the secret really paints in an ordinary capture').toBeGreaterThan(200);
+          const ok = (await page.locator('#ok').boundingBox())!;
+          const shot = await safeScreenshot(page, { secrets: [TOKEN] });
+          if (shot.ok) {
+            const out = PNG.sync.read(shot.png);
+            const leaked = glyph.filter((i) => out.data[i] === raw.data[i] && out.data[i + 1] === raw.data[i + 1] && out.data[i + 2] === raw.data[i + 2]);
+            expect(leaked.length, 'secret pixels reproduced in the published image').toBe(0);
+            expect(dark(shot.png, ok), 'non-sensitive evidence survives').toBeGreaterThan(0);
+          }
+          expect(shot.ok ? 'accepted' : `withheld: ${shot.withheld}`).toMatch(expected === 'accepted' ? /^accepted$/ : /^withheld: .*could not be verified as suppressed/);
+          // The page is left as it was: no marks, no suppression, no injected sheets.
+          expect(await page.evaluate(() => document.querySelectorAll('[data-qa-sensitive],[data-qa-suppressed],[data-qa-mask-overlay],style#qa-sensitive-hide').length + document.adoptedStyleSheets.length)).toBe(0);
+          expect(await page.evaluate(() => document.getElementById('x')!.style.cssText)).toBe(styleBefore);
+        } finally {
+          await page.close();
+        }
+      });
     });
 
     it.each([['generated'], ['overflow']] as const)('a fixture secret shown as %s content is masked in evidence, visual candidates and diffs, and the S2 image', async (mode) => {

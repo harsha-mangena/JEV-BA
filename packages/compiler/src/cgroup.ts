@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, rmdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, rmdir, statfs, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
@@ -27,19 +27,47 @@ export interface CgroupLimits {
 export interface SandboxCgroup {
   version: 1 | 2;
   path: string;
-  /** Move a process (before it runs untrusted code) into the cgroup. */
+  /** Move a process (before it runs untrusted code) into the cgroup, and verify the kernel placed it there. */
   join(pid: number): Promise<void>;
+  /** Whether the kernel reports `pid` as a member of this cgroup (in every hierarchy the limits use). */
+  isMember(pid: number): Promise<boolean>;
   /** Whether the memory limit was hit (an OOM kill inside the cgroup) and the peak usage seen. */
   stats(): Promise<{ oomKilled: boolean; peakBytes: number | null }>;
   /** Kill anything left inside and remove the cgroup. */
   destroy(): Promise<void>;
 }
 
+/** statfs(2) magic numbers of the two cgroup filesystems. */
+const CGROUP_SUPER_MAGIC = 0x27e0eb;
+const CGROUP2_SUPER_MAGIC = 0x63677270;
+/** The kernel keeps memory limits in whole pages; a read-back may differ from the request by less than one. */
+const MAX_PAGE_BYTES = 64 * 1024;
+
 const exists = (p: string) => access(p).then(() => true, () => false);
+
+/** Which cgroup filesystem holds `dir` (null: not a cgroup filesystem at all). */
+async function cgroupVersionOf(dir: string): Promise<1 | 2 | null> {
+  const t = (await statfs(dir)).type;
+  return t === CGROUP2_SUPER_MAGIC ? 2 : t === CGROUP_SUPER_MAGIC ? 1 : null;
+}
+
+/** Write a control file the kernel created; never create one (an ordinary file would enforce nothing). */
+async function writeControl(file: string, value: string): Promise<void> {
+  const h = await open(file, 'r+');
+  try {
+    await h.write(value);
+  } finally {
+    await h.close();
+  }
+}
+
+async function readControl(file: string): Promise<string> {
+  return (await readFile(file, 'utf8')).trim();
+}
 
 async function writeAs(file: string, value: string, sudo: boolean): Promise<void> {
   try {
-    await writeFile(file, value);
+    await writeControl(file, value);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (!sudo || (code !== 'EACCES' && code !== 'EPERM')) throw e;
@@ -71,48 +99,97 @@ async function v2Mount(): Promise<string | null> {
   return null;
 }
 
-/** Create a per-run cgroup with the given limits, or say why none can be created. */
+/** The cgroup `pid` belongs to in the hierarchy that holds `controller` (v1) or in the unified hierarchy (v2). */
+async function cgroupOf(pid: number, version: 1 | 2, controller = 'memory'): Promise<string | null> {
+  const lines = (await readFile(`/proc/${pid}/cgroup`, 'utf8').catch(() => '')).trim().split('\n');
+  for (const l of lines) {
+    const [id, ctrls, path] = l.split(':', 3) as [string, string, string | undefined];
+    if (version === 2 ? id === '0' && ctrls === '' : ctrls.split(',').includes(controller)) return path ?? null;
+  }
+  return null;
+}
+
+async function listsPid(procsFile: string, pid: number): Promise<boolean> {
+  return (await readFile(procsFile, 'utf8').catch(() => '')).split('\n').includes(String(pid));
+}
+
+/** The limit must read back as requested (to within one page), or it is not the limit that will be enforced. */
+function checkLimit(what: string, requested: number, actual: string): void {
+  const n = Number(actual);
+  if (!Number.isFinite(n) || n > requested || requested - n >= MAX_PAGE_BYTES) throw new Error(`${what} reads back as ${actual}, not ${requested}`);
+}
+
+/**
+ * Create a per-run cgroup with the given limits, or say why none can be
+ * created. Nothing is assumed from paths: the parent must be on a cgroup
+ * filesystem (statfs), with the controllers delegated to it; the control files
+ * written must be ones the kernel created; the configured limits must read
+ * back as requested; and `join` verifies kernel membership. A plain
+ * directory, a hand-made controller layout or a hierarchy without the memory
+ * controller is rejected.
+ */
 export async function createSandboxCgroup(limits: CgroupLimits, env: NodeJS.ProcessEnv = process.env): Promise<SandboxCgroup | { unavailable: string }> {
   if (process.platform !== 'linux') return { unavailable: `cgroups require Linux (platform ${process.platform})` };
   const sudo = env.QA_SANDBOX_CGROUP_SUDO === '1';
   const name = `qa-sbx-${randomBytes(6).toString('hex')}`;
-  const own = await ownCgroups();
-  const candidates: Array<{ version: 1 | 2; parent: string; pidsParent?: string }> = [];
-  if (env.QA_SANDBOX_CGROUP) candidates.push({ version: (await exists(join(env.QA_SANDBOX_CGROUP, 'cgroup.controllers'))) ? 2 : 1, parent: env.QA_SANDBOX_CGROUP });
+  const candidates: Array<{ parent: string; pidsParent?: string }> = [];
+  if (env.QA_SANDBOX_CGROUP) candidates.push({ parent: env.QA_SANDBOX_CGROUP });
   else {
+    const own = await ownCgroups();
     const v2 = await v2Mount();
-    if (v2 && own.v2 !== null) candidates.push({ version: 2, parent: join(v2, own.v2) });
-    if (own.memory !== null && (await exists('/sys/fs/cgroup/memory/memory.limit_in_bytes'))) {
-      candidates.push({ version: 1, parent: join('/sys/fs/cgroup/memory', own.memory), ...(own.pids !== null && (await exists('/sys/fs/cgroup/pids')) ? { pidsParent: join('/sys/fs/cgroup/pids', own.pids) } : {}) });
-    }
+    if (v2 && own.v2 !== null) candidates.push({ parent: join(v2, own.v2) });
+    if (own.memory !== null) candidates.push({ parent: join('/sys/fs/cgroup/memory', own.memory), ...(own.pids !== null ? { pidsParent: join('/sys/fs/cgroup/pids', own.pids) } : {}) });
   }
   const tried: string[] = [];
   for (const c of candidates) {
     const dir = join(c.parent, name);
+    let pidsDir: string | null = null;
+    let made = false;
     try {
-      if (c.version === 2) {
-        const enabled = (await readFile(join(c.parent, 'cgroup.subtree_control'), 'utf8')).split(/\s+/);
-        if (!enabled.includes('memory')) throw new Error(`memory controller is not delegated to ${c.parent}`);
+      const version = await cgroupVersionOf(c.parent);
+      if (version === null) throw new Error('not on a cgroup filesystem');
+      if (version === 2) {
+        if (!(await exists(join(c.parent, 'cgroup.controllers')))) throw new Error('no cgroup.controllers: not a cgroup v2 directory');
+        const enabled = (await readControl(join(c.parent, 'cgroup.subtree_control'))).split(/\s+/);
+        if (!enabled.includes('memory')) throw new Error('the memory controller is not delegated to it (cgroup.subtree_control)');
+        if (limits.pids && !enabled.includes('pids')) throw new Error('the pids controller is not delegated to it (cgroup.subtree_control)');
         await mkdir(dir);
-        await writeFile(join(dir, 'memory.max'), String(limits.memoryBytes));
-        if (await exists(join(dir, 'memory.swap.max'))) await writeFile(join(dir, 'memory.swap.max'), '0');
-        if (await exists(join(dir, 'memory.oom.group'))) await writeFile(join(dir, 'memory.oom.group'), '1');
-        if (limits.pids && (await exists(join(dir, 'pids.max')))) await writeFile(join(dir, 'pids.max'), String(limits.pids));
-        return v2Group(dir, sudo);
+        made = true;
+        if ((await cgroupVersionOf(dir)) !== 2) throw new Error('the new cgroup is not on the cgroup v2 filesystem');
+        for (const f of ['cgroup.procs', 'memory.max', 'memory.events']) if (!(await exists(join(dir, f)))) throw new Error(`the kernel did not create ${f}`);
+        await writeControl(join(dir, 'memory.max'), String(limits.memoryBytes));
+        checkLimit('memory.max', limits.memoryBytes, await readControl(join(dir, 'memory.max')));
+        if (await exists(join(dir, 'memory.swap.max'))) {
+          await writeControl(join(dir, 'memory.swap.max'), '0');
+          if ((await readControl(join(dir, 'memory.swap.max'))) !== '0') throw new Error('memory.swap.max did not take 0');
+        }
+        if (await exists(join(dir, 'memory.oom.group'))) await writeControl(join(dir, 'memory.oom.group'), '1');
+        if (limits.pids) {
+          await writeControl(join(dir, 'pids.max'), String(limits.pids));
+          if ((await readControl(join(dir, 'pids.max'))) !== String(limits.pids)) throw new Error('pids.max did not take the requested value');
+        }
+        return v2Group(dir, name, sudo);
       }
+      if (!(await exists(join(c.parent, 'memory.limit_in_bytes')))) throw new Error('not in the cgroup v1 memory hierarchy (no memory.limit_in_bytes)');
       await mkdir(dir);
-      await writeFile(join(dir, 'memory.limit_in_bytes'), String(limits.memoryBytes));
-      if (await exists(join(dir, 'memory.memsw.limit_in_bytes'))) await writeFile(join(dir, 'memory.memsw.limit_in_bytes'), String(limits.memoryBytes)).catch(() => undefined);
-      let pidsDir: string | null = null;
-      if (limits.pids && c.pidsParent) {
+      made = true;
+      if ((await cgroupVersionOf(dir)) !== 1) throw new Error('the new cgroup is not on a cgroup v1 filesystem');
+      for (const f of ['cgroup.procs', 'memory.limit_in_bytes']) if (!(await exists(join(dir, f)))) throw new Error(`the kernel did not create ${f}`);
+      await writeControl(join(dir, 'memory.limit_in_bytes'), String(limits.memoryBytes));
+      checkLimit('memory.limit_in_bytes', limits.memoryBytes, await readControl(join(dir, 'memory.limit_in_bytes')));
+      if (await exists(join(dir, 'memory.memsw.limit_in_bytes'))) await writeControl(join(dir, 'memory.memsw.limit_in_bytes'), String(limits.memoryBytes)).catch(() => undefined);
+      // v1 keeps pids in its own hierarchy; RLIMIT_NPROC bounds processes regardless, so this cap is added where available.
+      if (limits.pids && c.pidsParent && (await exists(c.pidsParent)) && (await cgroupVersionOf(c.pidsParent)) === 1) {
         pidsDir = join(c.pidsParent, name);
-        await mkdir(pidsDir).catch(() => (pidsDir = null));
-        if (pidsDir) await writeFile(join(pidsDir, 'pids.max'), String(limits.pids)).catch(() => undefined);
+        await mkdir(pidsDir);
+        if (!(await exists(join(pidsDir, 'pids.max')))) throw new Error('the kernel did not create pids.max');
+        await writeControl(join(pidsDir, 'pids.max'), String(limits.pids));
       }
-      return v1Group(dir, pidsDir, sudo);
+      return v1Group(dir, pidsDir, name, sudo);
     } catch (e) {
       tried.push(`${c.parent}: ${(e as Error).message}`);
-      await rmdir(dir).catch(() => undefined);
+      if (made) await rmdir(dir).catch(() => undefined);
+      if (pidsDir) await rmdir(pidsDir).catch(() => undefined);
     }
   }
   return { unavailable: `no cgroup could be created for the sandbox memory limit (${tried.join('; ') || 'no cgroup hierarchy found'}); delegate one with QA_SANDBOX_CGROUP` };
@@ -137,11 +214,16 @@ async function removeDir(dir: string, procs: string): Promise<void> {
   }
 }
 
-function v2Group(dir: string, sudo: boolean): SandboxCgroup {
+function v2Group(dir: string, name: string, sudo: boolean): SandboxCgroup {
+  const isMember = async (pid: number) => (await listsPid(join(dir, 'cgroup.procs'), pid)) && !!(await cgroupOf(pid, 2))?.endsWith(`/${name}`);
   return {
     version: 2,
     path: dir,
-    join: (pid) => writeAs(join(dir, 'cgroup.procs'), String(pid), sudo),
+    isMember,
+    async join(pid) {
+      await writeAs(join(dir, 'cgroup.procs'), String(pid), sudo);
+      if (!(await isMember(pid))) throw new Error(`the kernel does not report process ${pid} in ${dir}`);
+    },
     async stats() {
       const events = await readFile(join(dir, 'memory.events'), 'utf8').catch(() => '');
       const oom = Number(/^oom_kill (\d+)/m.exec(events)?.[1] ?? 0);
@@ -155,13 +237,19 @@ function v2Group(dir: string, sudo: boolean): SandboxCgroup {
   };
 }
 
-function v1Group(dir: string, pidsDir: string | null, sudo: boolean): SandboxCgroup {
+function v1Group(dir: string, pidsDir: string | null, name: string, sudo: boolean): SandboxCgroup {
+  const isMember = async (pid: number) =>
+    (await listsPid(join(dir, 'cgroup.procs'), pid)) &&
+    !!(await cgroupOf(pid, 1, 'memory'))?.endsWith(`/${name}`) &&
+    (!pidsDir || ((await listsPid(join(pidsDir, 'cgroup.procs'), pid)) && !!(await cgroupOf(pid, 1, 'pids'))?.endsWith(`/${name}`)));
   return {
     version: 1,
     path: dir,
+    isMember,
     async join(pid) {
       await writeAs(join(dir, 'cgroup.procs'), String(pid), sudo);
       if (pidsDir) await writeAs(join(pidsDir, 'cgroup.procs'), String(pid), sudo);
+      if (!(await isMember(pid))) throw new Error(`the kernel does not report process ${pid} in ${dir}`);
     },
     async stats() {
       const oomControl = await readFile(join(dir, 'memory.oom_control'), 'utf8').catch(() => '');

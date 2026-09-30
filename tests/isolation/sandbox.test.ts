@@ -1,10 +1,11 @@
-import { spawnSync } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runSandboxed, sandboxAvailable, validateGeneratedSpec } from '@qa/compiler';
+import { createSandboxCgroup, runSandboxed, sandboxAvailable, validateGeneratedSpec } from '@qa/compiler';
 
 /**
  * Isolation lane (audit F03). Hostile programs run directly in the sandbox —
@@ -207,5 +208,67 @@ describe('enforced memory limit', () => {
     expect(r.status).toBe('unavailable');
     expect(r.stdout).not.toContain('ran');
     expect(r.stderr).toMatch(/memory limit cannot be enforced/);
+  });
+
+  describe('only a real, delegated kernel cgroup is accepted (review-4 P4c)', () => {
+    const LIMITS = { memoryBytes: 64 * 1024 * 1024, pids: 64 };
+    const ran = async (workDir: string) => stat(join(workDir, 'ran')).then(() => true, () => false);
+
+    it('rejects an ordinary writable directory before anything is dispatched', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'qa-plain-cgroup-'));
+      try {
+        const cg = await createSandboxCgroup(LIMITS, { QA_SANDBOX_CGROUP: dir });
+        expect('unavailable' in cg && cg.unavailable).toMatch(/not on a cgroup filesystem/);
+        const r = await hostile('mem-plain', `require('fs').writeFileSync('/sandbox/work/ran', '1')`, { limits: { memoryBytes: LIMITS.memoryBytes }, hostEnv: { QA_SANDBOX_CGROUP: dir } });
+        expect(r.status).toBe('unavailable');
+        expect(await ran(r.workDir), 'the program must not have run').toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a hand-made controller layout (files named like a cgroup on an ordinary filesystem)', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'qa-fake-layout-'));
+      try {
+        for (const [f, v] of [['cgroup.controllers', 'memory pids'], ['cgroup.subtree_control', 'memory pids'], ['cgroup.procs', ''], ['memory.max', 'max'], ['memory.limit_in_bytes', '9223372036854771712']]) await writeFile(join(dir, f!), v!);
+        const cg = await createSandboxCgroup(LIMITS, { QA_SANDBOX_CGROUP: dir });
+        expect('unavailable' in cg && cg.unavailable).toMatch(/not on a cgroup filesystem/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a real cgroup without the memory controller delegated to it', async () => {
+      const real = await createSandboxCgroup(LIMITS);
+      if ('unavailable' in real) throw new Error(real.unavailable);
+      try {
+        // v2: a fresh cgroup has no controllers enabled for its children; v1: a hierarchy other than memory.
+        const parent = real.version === 2 ? real.path : '/sys/fs/cgroup/pids';
+        const cg = await createSandboxCgroup(LIMITS, { QA_SANDBOX_CGROUP: parent });
+        expect('unavailable' in cg && cg.unavailable).toMatch(real.version === 2 ? /memory controller is not delegated/ : /not in the cgroup v1 memory hierarchy/);
+      } finally {
+        await real.destroy();
+      }
+    });
+
+    it('verifies kernel membership, and the configured limit reads back as requested', async () => {
+      const cg = await createSandboxCgroup(LIMITS);
+      if ('unavailable' in cg) throw new Error(cg.unavailable);
+      const p = spawn('sleep', ['30'], { stdio: 'ignore' });
+      try {
+        await new Promise((r) => p.once('spawn', r));
+        expect(await cg.isMember(p.pid!), 'not a member before joining').toBe(false);
+        await cg.join(p.pid!);
+        expect(await cg.isMember(p.pid!)).toBe(true);
+        const limit = await readFile(join(cg.path, cg.version === 2 ? 'memory.max' : 'memory.limit_in_bytes'), 'utf8');
+        expect(Number(limit)).toBe(LIMITS.memoryBytes);
+        // A process that is gone cannot be joined; the join fails instead of reporting success.
+        const gone = spawnSync('true').pid;
+        await expect(cg.join(gone)).rejects.toThrow();
+      } finally {
+        p.kill('SIGKILL');
+        await cg.destroy();
+      }
+    });
   });
 });

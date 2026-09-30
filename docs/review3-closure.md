@@ -7,6 +7,11 @@ This report responds to the third independent review, which covered revision
 The lane manifests for the final commit are in `docs/evidence/review3-lanes/`, and §4 lists what
 they show.
 
+> **Superseded in part by the fourth review** ([`review4-closure.md`](review4-closure.md)). The N1 check that
+> compared two captures within a rasterization tolerance could be defeated by page CSS (P4a) and accepted
+> low-contrast secret glyphs (P4b); it has been replaced by verified suppression. The memory-limit cgroup
+> factory accepted an ordinary directory (P4c); it now validates the kernel hierarchy. N2 and N3 stand.
+
 **Status.** The review's three residual code findings are fixed, and the sandbox now enforces a
 memory limit. This is still not a qualified autonomous-testing platform for a real application.
 Every item below is reported at four separate evidence levels, and no level is inferred from the

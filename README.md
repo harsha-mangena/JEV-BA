@@ -28,11 +28,14 @@ retries of an unresolved effect, N3 revocation of running shards); they are
 fixed together with an enforced sandbox memory limit —
 [`docs/review3-closure.md`](docs/review3-closure.md), which also separates
 mechanism, fixture proof, authenticated-provider proof and target
-qualification for every area.
+qualification for every area. A fourth review of the merged result found that
+page CSS and low-contrast glyphs could defeat the screenshot privacy check and
+that a plain directory was accepted as a memory cgroup (P4a–P4c); the fixes
+and fresh lane evidence are in [`docs/review4-closure.md`](docs/review4-closure.md).
 
 | Item | State |
 | --- | --- |
-| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency; re-audit R1–R5 | `IMPLEMENTED_OFFLINE_VERIFIED` |
+| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency; re-audit R1–R5, review-3 N1–N3, review-4 P4a–P4c | `IMPLEMENTED_OFFLINE_VERIFIED` |
 | F01 TypeSafe/Jev contract, F07 vision S2 | `LIVE_VERIFICATION_REQUIRED` (provider credentials) |
 | Calibrated autonomy for any profile | `BLOCKED` (no representative labelled data or live record; workers run calibrated exploration in shadow mode) |
 
