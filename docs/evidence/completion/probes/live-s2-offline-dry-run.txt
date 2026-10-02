@@ -1,0 +1,43 @@
+# Offline dry run of tests/live/s2-vision.test.ts (NOT provider proof)
+# ANTHROPIC_API_KEY=<dummy> ANTHROPIC_BASE_URL=http://127.0.0.1:9 (closed local port): nothing left this machine.
+# The canary/sanitization assertions run before the provider call; the run reaching 'Connection error' shows they passed.
+
+ RUN  v3.2.7 /home/user/JEV-BA
+
+ ❯ tests/live/s2-vision.test.ts (1 test | 1 failed) 2069ms
+   × live vision System Two > returns a valid bounded proposal for an ambiguous checkout with a screenshot 1939ms
+     → Connection error.
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/live/s2-vision.test.ts > live vision System Two > returns a valid bounded proposal for an ambiguous checkout with a screenshot
+Error: Connection error.
+ ❯ Anthropic.makeRequest node_modules/@anthropic-ai/sdk/src/client.ts:1227:13
+ ❯ AnthropicVisionS2Provider.propose packages/s2/src/anthropic.ts:91:22
+     89| 
+     90|   async propose(input: S2EscalationInput, signal?: AbortSignal): Promi…
+     91|     const response = await this.client.messages.parse(
+       |                      ^
+     92|       {
+     93|         model: this.model,
+ ❯ tests/live/s2-vision.test.ts:76:19
+
+Caused by: TypeError: fetch failed
+ ❯ timedFetch node_modules/@anthropic-ai/sdk/src/client.ts:1365:16
+ ❯ Anthropic.fetchWithTimeout node_modules/@anthropic-ai/sdk/src/client.ts:1409:12
+ ❯ Anthropic.makeRequest node_modules/@anthropic-ai/sdk/src/client.ts:1153:22
+ ❯ AnthropicVisionS2Provider.propose packages/s2/src/anthropic.ts:91:22
+ ❯ tests/live/s2-vision.test.ts:76:19
+
+Caused by: Error: bad port
+ ❯ timedFetch node_modules/@anthropic-ai/sdk/src/client.ts:1365:32
+ ❯ innerFetch node_modules/@anthropic-ai/sdk/src/client.ts:1399:18
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  23:09:25
+   Duration  3.75s (transform 583ms, setup 0ms, collect 1.37s, tests 2.07s, environment 0ms, prepare 66ms)
+

@@ -3,7 +3,7 @@ import { chmod, chown, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createConnection, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createSandboxCgroup, type SandboxCgroup } from './cgroup.ts';
+import { createSandboxCgroup, type CgroupFailure, type ResourceGuarantee, type SandboxCgroup } from './cgroup.ts';
 
 /**
  * Linux namespace sandbox for generated or repaired test code (audit F03).
@@ -56,6 +56,10 @@ export interface SandboxResult {
   status: 'exited' | 'timeout' | 'unavailable';
   /** A resource limit the program hit (it was killed for it). */
   exceeded?: 'memory';
+  /** With a memory limit: what the run's cgroup enforced, and how each bound was established. */
+  guarantee?: ResourceGuarantee;
+  /** When the run was refused because a required bound could not be established: why, per hierarchy tried. */
+  refused?: Array<{ parent: string; reason: CgroupFailure | 'membership_unverified'; guarantee: string; detail: string }>;
   code: number | null;
   signal: string | null;
   stdout: string;
@@ -203,7 +207,7 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
     };
     if (lim.memoryBytes !== undefined) {
       const cg = await createSandboxCgroup({ memoryBytes: lim.memoryBytes, pids: lim.nproc ?? 1024 }, o.hostEnv ?? process.env);
-      if ('unavailable' in cg) return { status: 'unavailable', code: null, signal: null, stdout: '', stderr: `memory limit cannot be enforced: ${cg.unavailable}` };
+      if ('unavailable' in cg) return { status: 'unavailable', code: null, signal: null, stdout: '', stderr: `memory limit cannot be enforced: ${cg.unavailable}`, refused: cg.failures };
       cgroup = cg;
     }
     return await new Promise<SandboxResult>((resolve) => {
@@ -234,7 +238,7 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
         clearTimeout(timer);
         void (async () => {
           const exceeded = cgroup && (await cgroup.stats()).oomKilled ? ('memory' as const) : undefined;
-          resolve({ status: timedOut ? 'timeout' : 'exited', ...(exceeded ? { exceeded } : {}), code, signal, stdout, stderr });
+          resolve({ status: timedOut ? 'timeout' : 'exited', ...(exceeded ? { exceeded } : {}), ...(cgroup ? { guarantee: cgroup.guarantee } : {}), code, signal, stdout, stderr });
         })();
       });
       if (cgroup) {
@@ -247,7 +251,7 @@ export async function runSandboxed(o: SandboxRun): Promise<SandboxResult> {
               /* already gone */
             }
             clearTimeout(timer);
-            resolve({ status: 'unavailable', code: null, signal: null, stdout, stderr: `memory limit cannot be enforced: joining ${cgroup!.path} failed: ${e.message}` });
+            resolve({ status: 'unavailable', code: null, signal: null, stdout, stderr: `memory limit cannot be enforced: joining ${cgroup!.path} failed: ${e.message}`, refused: [{ parent: cgroup!.path, reason: 'membership_unverified', guarantee: 'memory', detail: e.message }] });
           },
         );
       }

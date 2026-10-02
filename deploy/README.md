@@ -59,9 +59,18 @@ dispatch: qualify again.
   content and the policy's `privacy.mask_selectors`; declare selectors for
   regions (e.g. server-rendered images) that can show sensitive data. The
   image is taken while that content's paint is suppressed and verified hidden;
-  when that cannot be shown (for example closed shadow roots outside
-  Chromium, or a page that keeps rewriting the content during capture) the
-  image is withheld and the reason is recorded in the evidence log.
+  when that cannot be shown (for example a page that keeps rewriting the
+  content during capture) the image is withheld and the reason is recorded in
+  the evidence log. Every closed shadow root, on any element, is treated as
+  opaque sensitive content (Chromium inventories them through the DevTools
+  protocol); **browsers without that protocol (Firefox, WebKit) withhold every
+  screenshot**, because closed roots cannot be ruled out there. A masked region
+  proves nothing about the value it hides: check such values with a backend or
+  UI oracle. Threat model: author styles, CSP, closed/user-agent shadow trees
+  and ordinary page activity are covered; a page script that deliberately
+  rewrites the CSSOM *within* the capture window, without touching the DOM, is
+  not — where that matters, disable external screenshot publication
+  (`artifacts.model_sharing: text_only` in the onboarding manifest).
 - **Retries.** A case whose earlier effect is unresolved is never retried in the
   same execution; it ends `NEEDS_REVIEW` and the gate holds until adjudication.
 - **Qualification.** Grants expire with their live compatibility evidence and
@@ -90,7 +99,7 @@ dispatch: qualify again.
 | `QA_CALIBRATION_DIR` | worker | Calibration registry for calibrated mode. |
 | `QA_SANDBOX_CGROUP` | worker | Delegated parent cgroup (v2 directory with `memory` and `pids` in its `cgroup.subtree_control`, or a v1 memory-hierarchy directory) in which each sandboxed run gets its own memory-limited cgroup. It must be on a cgroup filesystem: an ordinary directory or a hand-made layout is rejected, limits must read back as set, and each process's membership is verified before it runs. Without a usable cgroup, generated-spec validation returns `error` instead of running. |
 | `QA_SANDBOX_CGROUP_SUDO` | worker | `1`: move sandboxed processes into their cgroup with `sudo -n tee` when the runner cannot write the common ancestor's `cgroup.procs`. |
-| `QA_SANDBOX_MEMORY_MB` | worker | Memory limit for generated-spec validation (default 2048). |
+| `QA_SANDBOX_MEMORY_MB` | worker | Memory limit for generated-spec validation (default 2048). Must be a positive whole number; anything else is an error, not the default. |
 
 ## Unattended demo flow
 
@@ -118,3 +127,22 @@ bootstraps a tenant/project/tokens, and then:
 
 In environments behind a TLS-intercepting proxy, pass the proxy and CA to the
 build: `docker build --build-arg HTTPS_PROXY=… --secret id=npm_ca,src=<ca.pem> …`.
+
+## Sandbox resource contract
+
+A sandboxed run starts only when its cgroup enforces all of the following, each
+written and read back (the run's `guarantee` records how):
+
+| Bound | cgroup v2 | cgroup v1 |
+|---|---|---|
+| Resident memory ≤ limit | `memory.max` | `memory.limit_in_bytes` |
+| Swap | `memory.swap.max = 0`: no swap at all | `memory.memsw.limit_in_bytes = limit`: memory **plus** swap ≤ limit (some swap may be used within that total) |
+| Swap accounting off in the kernel | allowed only when `/proc/swaps` lists no swap when the group is created (enabling swap later is outside this check) | same |
+| Processes | `pids.max` (the `pids` controller must be delegated) | `pids.max` in the v1 pids hierarchy where the runner may create a group; otherwise only `RLIMIT_NPROC`, which the kernel counts per user (all threads of the sandbox uid), not per sandbox |
+
+Anything else — a denied write, a weaker read-back, a missing controller, a
+host with swap but no swap accounting, a process the kernel does not report as
+a member — refuses the run with a typed reason (`control_write_failed`,
+`limit_mismatch`, `controller_missing`, `swap_unbounded`,
+`membership_unverified`, `invalid_config`) and the program never starts.
+

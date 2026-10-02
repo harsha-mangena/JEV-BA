@@ -27,6 +27,8 @@ export interface CgroupLimits {
 export interface SandboxCgroup {
   version: 1 | 2;
   path: string;
+  /** What this group enforces, and how each part was established. */
+  guarantee: ResourceGuarantee;
   /** Move a process (before it runs untrusted code) into the cgroup, and verify the kernel placed it there. */
   join(pid: number): Promise<void>;
   /** Whether the kernel reports `pid` as a member of this cgroup (in every hierarchy the limits use). */
@@ -113,23 +115,81 @@ async function listsPid(procsFile: string, pid: number): Promise<boolean> {
   return (await readFile(procsFile, 'utf8').catch(() => '')).split('\n').includes(String(pid));
 }
 
-/** The limit must read back as requested (to within one page), or it is not the limit that will be enforced. */
-function checkLimit(what: string, requested: number, actual: string): void {
+
+/**
+ * The resource contract a sandbox cgroup promises (and records how it was
+ * established). Memory: the whole process tree's resident memory *plus swap*
+ * stays within `memoryBytes` — on v2 with `memory.swap.max = 0` (no swap at
+ * all), on v1 with `memory.memsw.limit_in_bytes` equal to the memory limit
+ * (a combined bound: some swap may be used, but never beyond the total), or,
+ * where the kernel has no swap accounting, only on a host with no swap
+ * configured (checked in /proc/swaps when the group is created; enabling swap
+ * later is outside this check). Processes: a cgroup pids cap where the pids
+ * controller is available (always on v2); on v1 without it, only the
+ * sandbox's RLIMIT_NPROC, which the kernel counts per user (all threads of the
+ * sandbox uid), not per sandbox.
+ */
+export interface ResourceGuarantee {
+  memoryBytes: number;
+  swap: { bound: 'zero' | 'combined_with_memory' | 'no_host_swap'; established_by: string };
+  pids: { cap: number; established_by: string } | { cap: null; established_by: string };
+}
+
+export type CgroupFailure = 'invalid_config' | 'not_linux' | 'no_hierarchy' | 'not_cgroup' | 'controller_missing' | 'control_missing' | 'control_write_failed' | 'limit_mismatch' | 'swap_unbounded';
+
+export interface CgroupUnavailable {
+  unavailable: string;
+  /** Why each candidate hierarchy was refused, and which guarantee failed. */
+  failures: Array<{ parent: string; reason: CgroupFailure; guarantee: 'memory' | 'swap' | 'pids' | 'hierarchy'; detail: string }>;
+}
+
+class SetupError extends Error {
+  constructor(
+    readonly reason: CgroupFailure,
+    readonly guarantee: 'memory' | 'swap' | 'pids' | 'hierarchy',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Write a control file and read it back; any failure refuses the group (a required bound is never skipped). */
+async function setControl(file: string, value: string, guarantee: 'memory' | 'swap' | 'pids', accept: (actual: string) => boolean): Promise<void> {
+  try {
+    await writeControl(file, value);
+  } catch (e) {
+    throw new SetupError('control_write_failed', guarantee, `${file} could not be set to ${value}: ${(e as Error).message}`);
+  }
+  const actual = await readControl(file).catch((e: Error) => `unreadable (${e.message})`);
+  if (!accept(actual)) throw new SetupError('limit_mismatch', guarantee, `${file} reads back as ${actual}, not ${value}`);
+}
+
+/** Within one page of the request and never above it (the kernel keeps limits in whole pages). */
+const limitMatches = (requested: number) => (actual: string) => {
   const n = Number(actual);
-  if (!Number.isFinite(n) || n > requested || requested - n >= MAX_PAGE_BYTES) throw new Error(`${what} reads back as ${actual}, not ${requested}`);
+  return Number.isFinite(n) && n <= requested && requested - n < MAX_PAGE_BYTES;
+};
+
+async function hostHasSwap(): Promise<boolean> {
+  const lines = (await readFile('/proc/swaps', 'utf8').catch(() => 'unreadable\nunknown')).trim().split('\n');
+  return lines.length > 1;
 }
 
 /**
  * Create a per-run cgroup with the given limits, or say why none can be
  * created. Nothing is assumed from paths: the parent must be on a cgroup
  * filesystem (statfs), with the controllers delegated to it; the control files
- * written must be ones the kernel created; the configured limits must read
- * back as requested; and `join` verifies kernel membership. A plain
- * directory, a hand-made controller layout or a hierarchy without the memory
- * controller is rejected.
+ * written must be ones the kernel created; every limit of the resource
+ * contract (see `ResourceGuarantee`) must be written and read back, or the
+ * group is refused; and `join` verifies kernel membership. A plain directory,
+ * a hand-made controller layout or a hierarchy without the memory controller
+ * is rejected.
  */
-export async function createSandboxCgroup(limits: CgroupLimits, env: NodeJS.ProcessEnv = process.env): Promise<SandboxCgroup | { unavailable: string }> {
-  if (process.platform !== 'linux') return { unavailable: `cgroups require Linux (platform ${process.platform})` };
+export async function createSandboxCgroup(limits: CgroupLimits, env: NodeJS.ProcessEnv = process.env): Promise<SandboxCgroup | CgroupUnavailable> {
+  const refuse = (reason: CgroupFailure, detail: string): CgroupUnavailable => ({ unavailable: detail, failures: [{ parent: '', reason, guarantee: 'hierarchy', detail }] });
+  if (!Number.isSafeInteger(limits.memoryBytes) || limits.memoryBytes <= 0) return refuse('invalid_config', `invalid memory limit ${limits.memoryBytes}: a positive whole number of bytes is required`);
+  if (limits.pids !== undefined && (!Number.isSafeInteger(limits.pids) || limits.pids <= 0)) return refuse('invalid_config', `invalid process cap ${limits.pids}: a positive whole number is required`);
+  if (process.platform !== 'linux') return refuse('not_linux', `cgroups require Linux (platform ${process.platform})`);
   const sudo = env.QA_SANDBOX_CGROUP_SUDO === '1';
   const name = `qa-sbx-${randomBytes(6).toString('hex')}`;
   const candidates: Array<{ parent: string; pidsParent?: string }> = [];
@@ -140,59 +200,79 @@ export async function createSandboxCgroup(limits: CgroupLimits, env: NodeJS.Proc
     if (v2 && own.v2 !== null) candidates.push({ parent: join(v2, own.v2) });
     if (own.memory !== null) candidates.push({ parent: join('/sys/fs/cgroup/memory', own.memory), ...(own.pids !== null ? { pidsParent: join('/sys/fs/cgroup/pids', own.pids) } : {}) });
   }
-  const tried: string[] = [];
+  const failures: CgroupUnavailable['failures'] = [];
+  const mem = String(limits.memoryBytes);
   for (const c of candidates) {
     const dir = join(c.parent, name);
     let pidsDir: string | null = null;
     let made = false;
     try {
-      const version = await cgroupVersionOf(c.parent);
-      if (version === null) throw new Error('not on a cgroup filesystem');
+      const version = await cgroupVersionOf(c.parent).catch(() => null);
+      if (version === null) throw new SetupError('not_cgroup', 'hierarchy', 'not on a cgroup filesystem');
+      const requireControls = async (d: string, files: string[]) => {
+        for (const f of files) if (!(await exists(join(d, f)))) throw new SetupError('control_missing', 'hierarchy', `the kernel did not create ${f}`);
+      };
+      const noSwapHost = async (why: string) => {
+        if (await hostHasSwap()) throw new SetupError('swap_unbounded', 'swap', `${why}, and this host has swap configured (/proc/swaps): memory plus swap would not be bounded`);
+        return { bound: 'no_host_swap' as const, established_by: `${why}; /proc/swaps lists no swap at creation` };
+      };
       if (version === 2) {
-        if (!(await exists(join(c.parent, 'cgroup.controllers')))) throw new Error('no cgroup.controllers: not a cgroup v2 directory');
+        if (!(await exists(join(c.parent, 'cgroup.controllers')))) throw new SetupError('not_cgroup', 'hierarchy', 'no cgroup.controllers: not a cgroup v2 directory');
         const enabled = (await readControl(join(c.parent, 'cgroup.subtree_control'))).split(/\s+/);
-        if (!enabled.includes('memory')) throw new Error('the memory controller is not delegated to it (cgroup.subtree_control)');
-        if (limits.pids && !enabled.includes('pids')) throw new Error('the pids controller is not delegated to it (cgroup.subtree_control)');
+        if (!enabled.includes('memory')) throw new SetupError('controller_missing', 'memory', 'the memory controller is not delegated to it (cgroup.subtree_control)');
+        if (limits.pids && !enabled.includes('pids')) throw new SetupError('controller_missing', 'pids', 'the pids controller is not delegated to it (cgroup.subtree_control)');
         await mkdir(dir);
         made = true;
-        if ((await cgroupVersionOf(dir)) !== 2) throw new Error('the new cgroup is not on the cgroup v2 filesystem');
-        for (const f of ['cgroup.procs', 'memory.max', 'memory.events']) if (!(await exists(join(dir, f)))) throw new Error(`the kernel did not create ${f}`);
-        await writeControl(join(dir, 'memory.max'), String(limits.memoryBytes));
-        checkLimit('memory.max', limits.memoryBytes, await readControl(join(dir, 'memory.max')));
+        if ((await cgroupVersionOf(dir)) !== 2) throw new SetupError('not_cgroup', 'hierarchy', 'the new cgroup is not on the cgroup v2 filesystem');
+        await requireControls(dir, ['cgroup.procs', 'memory.max', 'memory.events']);
+        await setControl(join(dir, 'memory.max'), mem, 'memory', limitMatches(limits.memoryBytes));
+        let swap: ResourceGuarantee['swap'];
         if (await exists(join(dir, 'memory.swap.max'))) {
-          await writeControl(join(dir, 'memory.swap.max'), '0');
-          if ((await readControl(join(dir, 'memory.swap.max'))) !== '0') throw new Error('memory.swap.max did not take 0');
-        }
+          await setControl(join(dir, 'memory.swap.max'), '0', 'swap', (a) => a === '0');
+          swap = { bound: 'zero', established_by: 'memory.swap.max = 0 (read back)' };
+        } else swap = await noSwapHost('no memory.swap.max (swap accounting is off)');
         if (await exists(join(dir, 'memory.oom.group'))) await writeControl(join(dir, 'memory.oom.group'), '1');
+        let pids: ResourceGuarantee['pids'] = { cap: null, established_by: 'no cap requested' };
         if (limits.pids) {
-          await writeControl(join(dir, 'pids.max'), String(limits.pids));
-          if ((await readControl(join(dir, 'pids.max'))) !== String(limits.pids)) throw new Error('pids.max did not take the requested value');
+          await setControl(join(dir, 'pids.max'), String(limits.pids), 'pids', (a) => a === String(limits.pids));
+          pids = { cap: limits.pids, established_by: 'pids.max (read back)' };
         }
-        return v2Group(dir, name, sudo);
+        return v2Group(dir, name, sudo, { memoryBytes: limits.memoryBytes, swap, pids });
       }
-      if (!(await exists(join(c.parent, 'memory.limit_in_bytes')))) throw new Error('not in the cgroup v1 memory hierarchy (no memory.limit_in_bytes)');
+      if (!(await exists(join(c.parent, 'memory.limit_in_bytes')))) throw new SetupError('controller_missing', 'memory', 'not in the cgroup v1 memory hierarchy (no memory.limit_in_bytes)');
       await mkdir(dir);
       made = true;
-      if ((await cgroupVersionOf(dir)) !== 1) throw new Error('the new cgroup is not on a cgroup v1 filesystem');
-      for (const f of ['cgroup.procs', 'memory.limit_in_bytes']) if (!(await exists(join(dir, f)))) throw new Error(`the kernel did not create ${f}`);
-      await writeControl(join(dir, 'memory.limit_in_bytes'), String(limits.memoryBytes));
-      checkLimit('memory.limit_in_bytes', limits.memoryBytes, await readControl(join(dir, 'memory.limit_in_bytes')));
-      if (await exists(join(dir, 'memory.memsw.limit_in_bytes'))) await writeControl(join(dir, 'memory.memsw.limit_in_bytes'), String(limits.memoryBytes)).catch(() => undefined);
-      // v1 keeps pids in its own hierarchy; RLIMIT_NPROC bounds processes regardless, so this cap is added where available.
-      if (limits.pids && c.pidsParent && (await exists(c.pidsParent)) && (await cgroupVersionOf(c.pidsParent)) === 1) {
-        pidsDir = join(c.pidsParent, name);
-        await mkdir(pidsDir);
-        if (!(await exists(join(pidsDir, 'pids.max')))) throw new Error('the kernel did not create pids.max');
-        await writeControl(join(pidsDir, 'pids.max'), String(limits.pids));
-      }
-      return v1Group(dir, pidsDir, name, sudo);
+      if ((await cgroupVersionOf(dir)) !== 1) throw new SetupError('not_cgroup', 'hierarchy', 'the new cgroup is not on a cgroup v1 filesystem');
+      await requireControls(dir, ['cgroup.procs', 'memory.limit_in_bytes']);
+      await setControl(join(dir, 'memory.limit_in_bytes'), mem, 'memory', limitMatches(limits.memoryBytes));
+      let swap: ResourceGuarantee['swap'];
+      if (await exists(join(dir, 'memory.memsw.limit_in_bytes'))) {
+        // Required: the combined bound is the only thing that stops the tree from swapping past its memory limit.
+        await setControl(join(dir, 'memory.memsw.limit_in_bytes'), mem, 'swap', limitMatches(limits.memoryBytes));
+        swap = { bound: 'combined_with_memory', established_by: 'memory.memsw.limit_in_bytes = memory limit (read back)' };
+      } else swap = await noSwapHost('no memory.memsw.limit_in_bytes (swap accounting is off)');
+      let pids: ResourceGuarantee['pids'] = { cap: null, established_by: 'RLIMIT_NPROC only (counted per user: every thread of the sandbox uid), no v1 pids hierarchy for this cgroup' };
+      if (limits.pids && c.pidsParent && (await exists(c.pidsParent)) && (await cgroupVersionOf(c.pidsParent).catch(() => null)) === 1) {
+        // A v1 pids group this runner may not create leaves the documented RLIMIT_NPROC bound; one it did create
+        // must take and read back its cap, or the group is refused.
+        const pd = join(c.pidsParent, name);
+        if (await mkdir(pd).then(() => true, () => false)) {
+          pidsDir = pd;
+          await requireControls(pidsDir, ['pids.max', 'cgroup.procs']);
+          await setControl(join(pidsDir, 'pids.max'), String(limits.pids), 'pids', (a) => a === String(limits.pids));
+          pids = { cap: limits.pids, established_by: 'v1 pids.max (read back)' };
+        }
+      } else if (!limits.pids) pids = { cap: null, established_by: 'no cap requested' };
+      return v1Group(dir, pidsDir, name, sudo, { memoryBytes: limits.memoryBytes, swap, pids });
     } catch (e) {
-      tried.push(`${c.parent}: ${(e as Error).message}`);
+      const se = e instanceof SetupError ? e : new SetupError('control_write_failed', 'hierarchy', (e as Error).message);
+      failures.push({ parent: c.parent, reason: se.reason, guarantee: se.guarantee, detail: se.message });
       if (made) await rmdir(dir).catch(() => undefined);
       if (pidsDir) await rmdir(pidsDir).catch(() => undefined);
     }
   }
-  return { unavailable: `no cgroup could be created for the sandbox memory limit (${tried.join('; ') || 'no cgroup hierarchy found'}); delegate one with QA_SANDBOX_CGROUP` };
+  const detail = failures.map((f) => `${f.parent}: ${f.detail}`).join('; ') || 'no cgroup hierarchy found';
+  return { unavailable: `no cgroup could be created for the sandbox memory limit (${detail}); delegate one with QA_SANDBOX_CGROUP`, failures: failures.length ? failures : [{ parent: '', reason: 'no_hierarchy', guarantee: 'hierarchy', detail }] };
 }
 
 async function killAll(procsFile: string): Promise<void> {
@@ -214,11 +294,12 @@ async function removeDir(dir: string, procs: string): Promise<void> {
   }
 }
 
-function v2Group(dir: string, name: string, sudo: boolean): SandboxCgroup {
+function v2Group(dir: string, name: string, sudo: boolean, guarantee: ResourceGuarantee): SandboxCgroup {
   const isMember = async (pid: number) => (await listsPid(join(dir, 'cgroup.procs'), pid)) && !!(await cgroupOf(pid, 2))?.endsWith(`/${name}`);
   return {
     version: 2,
     path: dir,
+    guarantee,
     isMember,
     async join(pid) {
       await writeAs(join(dir, 'cgroup.procs'), String(pid), sudo);
@@ -237,7 +318,7 @@ function v2Group(dir: string, name: string, sudo: boolean): SandboxCgroup {
   };
 }
 
-function v1Group(dir: string, pidsDir: string | null, name: string, sudo: boolean): SandboxCgroup {
+function v1Group(dir: string, pidsDir: string | null, name: string, sudo: boolean, guarantee: ResourceGuarantee): SandboxCgroup {
   const isMember = async (pid: number) =>
     (await listsPid(join(dir, 'cgroup.procs'), pid)) &&
     !!(await cgroupOf(pid, 1, 'memory'))?.endsWith(`/${name}`) &&
@@ -245,6 +326,7 @@ function v1Group(dir: string, pidsDir: string | null, name: string, sudo: boolea
   return {
     version: 1,
     path: dir,
+    guarantee,
     isMember,
     async join(pid) {
       await writeAs(join(dir, 'cgroup.procs'), String(pid), sudo);

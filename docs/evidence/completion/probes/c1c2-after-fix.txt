@@ -1,0 +1,35 @@
+
+ RUN  v3.2.7 /home/user/JEV-BA
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > div host: the image is withheld or the secret's pixels are sanitized
+COMPLETION C1-div {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > span host: the image is withheld or the secret's pixels are sanitized
+COMPLETION C1-span {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: the same host declared as a sensitive selector is sanitized
+COMPLETION C1-selector-control {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: a registered custom-element host (already covered) is sanitized
+COMPLETION C1-custom-element-control {"glyph_pixels":2677,"light_dom_has_secret":false,"ok":true,"masked":1,"unsanitized_glyph_pixels":0}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > control: on this host a valid cgroup is created and the program runs
+COMPLETION C2-control {"version":1,"status":"exited","ran":true,"stderr":""}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a denied write of the swap bound refuses execution (fail closed)
+COMPLETION C2-swap-write-denied {"version":1,"control":"memory\\.memsw\\.limit_in_bytes$","status":"unavailable","ran":false,"stderr":"memory limit cannot be enforced: no cgroup could be created for the sandbox memory limit (/sys/fs/cgroup/unified/: the memory controller is not delegated to it (cgroup.subtree_control); /sys/fs/cgroup/memory/process_api/01a0f489-5cb5-70dc-a672-0ee6c024f414/claude-code-bash: /sys/fs/cgroup/memory/pro"}
+
+stdout | tests/audit/completion.test.ts > C2: the swap bound of the memory limit (v1: memory.memsw.limit_in_bytes) > a swap bound that reads back weaker than requested refuses execution
+COMPLETION C2-swap-readback-mismatch {"version":1,"control":"memory\\.memsw\\.limit_in_bytes$","status":"unavailable","ran":false,"stderr":"memory limit cannot be enforced: no cgroup could be created for the sandbox memory limit (/sys/fs/cgroup/unified/: the memory controller is not delegated to it (cgroup.subtree_control); /sys/fs/cgroup/memory/process_api/01a0f489-5cb5-70dc-a672-0ee6c024f414/claude-code-bash: /sys/fs/cgroup/memory/pro"}
+
+ ✓ tests/audit/completion.test.ts (7 tests) 1994ms
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > div host: the image is withheld or the secret's pixels are sanitized  501ms
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > span host: the image is withheld or the secret's pixels are sanitized  313ms
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: the same host declared as a sensitive selector is sanitized  361ms
+   ✓ C1: a secret inside a closed shadow root on an ordinary HTML host > positive control: a registered custom-element host (already covered) is sanitized  349ms
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  23:21:24
+   Duration  4.07s (transform 472ms, setup 0ms, collect 1.69s, tests 1.99s, environment 0ms, prepare 73ms)
+

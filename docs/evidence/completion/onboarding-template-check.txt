@@ -1,0 +1,14 @@
+$ npm run qa -- onboarding-check --manifest docs/templates/target-onboarding.yaml
+missing  application.owner_contact  (who supplies and approves the inputs below)
+missing  source  (candidate provenance and lineage) — to be supplied by the application owner
+missing  candidate  (prove which deployment the browser tested) — to be supplied by the application owner
+missing  journeys  (independent pass/fail requirements) — to be supplied by the application owner
+missing  identities  (isolated sessions and repeatable state) — to be supplied by the application owner
+missing  mutations  (authorize and reconcile actions) — to be supplied by the application owner
+missing  backend_oracles  (verify persisted business outcomes) — to be supplied by the application owner
+missing  cleanup  (recover disposable data and contain effects) — to be supplied by the application owner
+missing  profiles  (define qualification scope) — to be supplied by the application owner
+missing  artifacts  (control evidence publication) — to be supplied by the application owner
+missing  promotion  (enforce release decisions) — to be supplied by the application owner
+BLOCKED
+exit=3

@@ -27,7 +27,7 @@ export interface FixtureControl {
    * Show the signed-in user's password in a fixed bottom-right banner (a secret rendered into pixels, for privacy
    * tests): as text (`true`), as CSS generated content (`'generated'`), or overflowing a 40px box (`'overflow'`).
    */
-  credentialEcho: boolean | 'generated' | 'overflow';
+  credentialEcho: boolean | 'generated' | 'overflow' | 'closed';
 }
 
 export interface FixtureApp {
@@ -119,6 +119,8 @@ export async function startFixtureApp(opts: FixtureAppOptions): Promise<FixtureA
     if (control.credentialEcho === 'generated') return `<style>[data-testid=credential-echo]::before{content:"Recovery code: " attr(data-code)}</style><div data-testid="credential-echo" data-code="${v.esc(user.password)}" style="${box}"></div>`;
     // A narrow box whose text overflows to the left (right-to-left run inside a right-anchored box).
     if (control.credentialEcho === 'overflow') return `<div data-testid="credential-echo" dir="rtl" style="${box.replace('width:360px', 'width:40px').replace('padding:12px', 'padding:12px 0')};white-space:nowrap;overflow:visible">Recovery code: ${v.esc(user.password)}</div>`;
+    // A plain div whose (declarative) closed shadow root shows the code: invisible to page script and light-DOM scans.
+    if (control.credentialEcho === 'closed') return `<div data-testid="credential-echo" style="${box}"><template shadowrootmode="closed"><span>Recovery code: ${v.esc(user.password)}</span></template></div>`;
     return `<div data-testid="credential-echo" style="${box}">Recovery code: ${v.esc(user.password)}</div>`;
   };
   const page = (res: ServerResponse, status: number, title: string, user: User | null, body: string, script?: string, extraBody?: string) =>

@@ -1,0 +1,313 @@
+{
+  "started_at": "2026-09-30T23:22:23.235Z",
+  "steps": [
+    {
+      "step": "clean deployment",
+      "run": {
+        "run_id": "run_4eMryj3N17xw",
+        "state": "COMPLETED",
+        "gate": {
+          "reasons": [],
+          "eligible": true
+        },
+        "generation": "1",
+        "suite_revision": "exec_16732f362440f6882d13dcbe",
+        "cases": [
+          "checkout_existing_customer@chromium_desktop: PASS",
+          "checkout_rejects_empty_address@chromium_desktop: PASS",
+          "notes_crud@chromium_desktop: PASS",
+          "settings_preference_persists@chromium_desktop: PASS",
+          "sign_in@chromium_desktop: PASS",
+          "viewer_cannot_create_notes@chromium_desktop: PASS"
+        ]
+      },
+      "promotion": {
+        "decision": {
+          "decision_id": "prom_FAAir7-wOnu9",
+          "eligible": true,
+          "reasons": [],
+          "run_id": "run_4eMryj3N17xw",
+          "channel": "default",
+          "generation": 1,
+          "expires_in_seconds": 900
+        },
+        "consume": {
+          "decision_id": "prom_FAAir7-wOnu9",
+          "promoted": true,
+          "reasons": [],
+          "deployment_id": "clean-1",
+          "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "channel": "default",
+          "generation": 1
+        }
+      },
+      "second_consume_status": 409
+    },
+    {
+      "step": "defective deployment",
+      "run": {
+        "run_id": "run_uqHRmZrb_3Xt",
+        "state": "COMPLETED",
+        "gate": {
+          "reasons": [
+            "checkout_existing_customer@chromium_desktop: FAIL"
+          ],
+          "eligible": false
+        },
+        "generation": "2",
+        "suite_revision": "exec_16732f362440f6882d13dcbe",
+        "cases": [
+          "checkout_existing_customer@chromium_desktop: FAIL",
+          "checkout_rejects_empty_address@chromium_desktop: PASS",
+          "notes_crud@chromium_desktop: PASS",
+          "settings_preference_persists@chromium_desktop: PASS",
+          "sign_in@chromium_desktop: PASS",
+          "viewer_cannot_create_notes@chromium_desktop: PASS"
+        ]
+      },
+      "promotion": {
+        "decision": {
+          "decision_id": "prom_6EFn3Ynnzk67",
+          "eligible": false,
+          "reasons": [
+            "checkout_existing_customer@chromium_desktop: FAIL"
+          ],
+          "run_id": "run_uqHRmZrb_3Xt",
+          "channel": "default",
+          "generation": 2,
+          "expires_in_seconds": 900
+        },
+        "consume": {
+          "decision_id": "prom_6EFn3Ynnzk67",
+          "promoted": false,
+          "reasons": [
+            "the decision was not eligible"
+          ],
+          "deployment_id": "defective-1",
+          "commit_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "channel": "default",
+          "generation": 2
+        }
+      },
+      "earlier_clean_decision_consumed_after_new_deployment": {
+        "decision_id": "prom_vsWOa-4cmEK2",
+        "promoted": false,
+        "reasons": [
+          "deployment clean-1 is not the current candidate (defective-1)",
+          "the decision is not bound to the newest generation of lineage default (1 → 2)"
+        ],
+        "deployment_id": "clean-1",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "channel": "default",
+        "generation": 1
+      }
+    },
+    {
+      "step": "worker SIGKILL mid-checkout",
+      "killed_at": "2026-09-30T23:23:34.282Z",
+      "intent": "checkout_existing_customer.chromium_desktop.a1.fa3710.i2",
+      "intent_state_at_kill": "DISPATCHING",
+      "transitions": [
+        [
+          "-",
+          "PREPARED",
+          "1"
+        ],
+        [
+          "PREPARED",
+          "DISPATCHING",
+          "1"
+        ],
+        [
+          "DISPATCHING",
+          "RECONCILING",
+          "2"
+        ],
+        [
+          "RECONCILING",
+          "RECONCILED",
+          "2"
+        ]
+      ],
+      "receipts": "order\tord_b851a6ac",
+      "jobs": [
+        [
+          "readiness",
+          "done",
+          "1",
+          "1"
+        ],
+        [
+          "execute_shard",
+          "done",
+          "2",
+          "2"
+        ],
+        [
+          "execute_shard",
+          "done",
+          "1",
+          "1"
+        ],
+        [
+          "aggregate",
+          "done",
+          "1",
+          "1"
+        ]
+      ],
+      "recovered_run": {
+        "run_id": "run_iVaK3I-OLKWv",
+        "state": "COMPLETED",
+        "gate": {
+          "reasons": [
+            "notes_crud@chromium_desktop: NEEDS_REVIEW on a required check",
+            "effect obligation notes_crud.chromium_desktop.a1.6c96a7.i3 (notes.create in notes_crud@chromium_desktop, run run_iVaK3I-OLKWv attempt 1) is NEEDS_REVIEW with no adjudication"
+          ],
+          "eligible": false
+        },
+        "generation": "3",
+        "suite_revision": "exec_16732f362440f6882d13dcbe",
+        "cases": [
+          "checkout_existing_customer@chromium_desktop: PASS",
+          "checkout_rejects_empty_address@chromium_desktop: PASS",
+          "notes_crud@chromium_desktop: NEEDS_REVIEW",
+          "settings_preference_persists@chromium_desktop: PASS",
+          "sign_in@chromium_desktop: PASS",
+          "viewer_cannot_create_notes@chromium_desktop: PASS"
+        ]
+      },
+      "open_effect_obligations": [
+        {
+          "intent_id": "notes_crud.chromium_desktop.a1.6c96a7.i3",
+          "run_id": "run_iVaK3I-OLKWv",
+          "run_attempt": 1,
+          "scenario_id": "notes_crud",
+          "execution_profile": "chromium_desktop",
+          "contract_intent": "notes.create",
+          "state": "NEEDS_REVIEW",
+          "detail": "notes.create is not recorded under an idempotency key by fixture-shop; inspect the application",
+          "live": false
+        }
+      ],
+      "gate_while_obligations_open": {
+        "eligible": false,
+        "run_id": "run_iVaK3I-OLKWv",
+        "reasons": [
+          "notes_crud@chromium_desktop: NEEDS_REVIEW on a required check",
+          "effect obligation notes_crud.chromium_desktop.a1.6c96a7.i3 (notes.create in notes_crud@chromium_desktop, run run_iVaK3I-OLKWv attempt 1) is NEEDS_REVIEW with no adjudication"
+        ]
+      },
+      "promotion_while_obligations_open": {
+        "decision": {
+          "decision_id": "prom_lP4wyalZMd3p",
+          "eligible": false,
+          "reasons": [
+            "notes_crud@chromium_desktop: NEEDS_REVIEW on a required check",
+            "effect obligation notes_crud.chromium_desktop.a1.6c96a7.i3 (notes.create in notes_crud@chromium_desktop, run run_iVaK3I-OLKWv attempt 1) is NEEDS_REVIEW with no adjudication"
+          ],
+          "run_id": "run_iVaK3I-OLKWv",
+          "channel": "default",
+          "generation": 3,
+          "expires_in_seconds": 900
+        },
+        "consume": {
+          "decision_id": "prom_lP4wyalZMd3p",
+          "promoted": false,
+          "reasons": [
+            "the decision was not eligible"
+          ],
+          "deployment_id": "clean-2",
+          "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "channel": "default",
+          "generation": 3
+        }
+      },
+      "adjudications": [
+        {
+          "intent_id": "notes_crud.chromium_desktop.a1.6c96a7.i3",
+          "adjudication": {
+            "resolution": "effect_present_accepted",
+            "by": "token:admin",
+            "note": "demo: test-owned effect inside the dead worker fixture; its cleanup obligation was swept",
+            "at": "2026-09-30T23:23:58.372Z"
+          }
+        }
+      ],
+      "run": {
+        "run_id": "run_iVaK3I-OLKWv",
+        "state": "COMPLETED",
+        "gate": {
+          "reasons": [],
+          "eligible": true
+        },
+        "generation": "3",
+        "suite_revision": "exec_16732f362440f6882d13dcbe",
+        "cases": [
+          "checkout_existing_customer@chromium_desktop: PASS",
+          "checkout_rejects_empty_address@chromium_desktop: PASS",
+          "notes_crud@chromium_desktop: NEEDS_REVIEW",
+          "settings_preference_persists@chromium_desktop: PASS",
+          "sign_in@chromium_desktop: PASS",
+          "viewer_cannot_create_notes@chromium_desktop: PASS",
+          "checkout_existing_customer@chromium_desktop: PASS",
+          "checkout_rejects_empty_address@chromium_desktop: PASS",
+          "notes_crud@chromium_desktop: PASS",
+          "settings_preference_persists@chromium_desktop: PASS",
+          "sign_in@chromium_desktop: PASS",
+          "viewer_cannot_create_notes@chromium_desktop: PASS"
+        ]
+      },
+      "promotion": {
+        "decision": {
+          "decision_id": "prom_JBQXLjkpak7B",
+          "eligible": true,
+          "reasons": [],
+          "run_id": "run_iVaK3I-OLKWv",
+          "channel": "default",
+          "generation": 3,
+          "expires_in_seconds": 900
+        },
+        "consume": {
+          "decision_id": "prom_JBQXLjkpak7B",
+          "promoted": true,
+          "reasons": [],
+          "deployment_id": "clean-2",
+          "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "channel": "default",
+          "generation": 3
+        }
+      },
+      "cleanup_after_recovery": "all obligations done"
+    }
+  ],
+  "worker_startup_checks": [
+    "ok   database: reachable",
+    "ok   migrations: 8 applied",
+    "ok   projects: 1 configured",
+    "ok   project:shop:suite: 6 scenarios, suite_279adccce3afb65d",
+    "ok   project:shop:fixture_token: QA_FIXTURE_TOKEN_SHOP set",
+    "ok   autonomy_mode: shadow",
+    "ok   browser: chromium launches"
+  ],
+  "metrics": [
+    "qa_runs{state=\"COMPLETED\"} 3",
+    "qa_jobs{kind=\"aggregate\",state=\"done\"} 4",
+    "qa_jobs{kind=\"readiness\",state=\"done\"} 4",
+    "qa_jobs{kind=\"execute_shard\",state=\"done\"} 8",
+    "qa_jobs_expired_leases 0",
+    "qa_outbox_pending 0",
+    "qa_cleanup_pending{state=\"done\"} 25",
+    "qa_intents{state=\"SETTLED\"} 14",
+    "qa_intents{state=\"RECONCILED\"} 6",
+    "qa_intents{state=\"NEEDS_REVIEW\"} 1",
+    "qa_intents{state=\"EFFECT_CONFIRMED\"} 4",
+    "qa_intents{state=\"ACKNOWLEDGED\"} 32",
+    "qa_promotions{outcome=\"promoted\"} 2",
+    "qa_promotions{outcome=\"refused\"} 3",
+    "qa_findings_open 0"
+  ],
+  "result": "PASSED",
+  "finished_at": "2026-09-30T23:24:07.638Z",
+  "image": "sha256:21916c9db80d52bcaef4b05ce5f579310b71b139cfa89b436f6f9a468a357c5f"
+}

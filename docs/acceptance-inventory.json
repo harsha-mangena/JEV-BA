@@ -688,6 +688,175 @@
         "provider_proof": "not applicable",
         "target_qualification": "none"
       }
+    },
+    {
+      "id": "C1",
+      "title": "Closed shadow roots on ordinary HTML hosts are found and sanitized (or the image withheld)",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "history": [
+        {
+          "state": "SOURCE_REVIEW_PENDING_REPRODUCTION",
+          "revision": "524a8e9",
+          "source": "post-PR #5 completion plan"
+        },
+        {
+          "state": "REPRODUCED",
+          "revision": "524a8e9",
+          "evidence": "docs/evidence/completion/probes/c1c2-at-524a8e9.txt",
+          "observed": "div and span hosts: accepted images with 2677/2677 secret glyph pixels unsanitized; selector and custom-element controls sanitized"
+        },
+        {
+          "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+          "evidence": "docs/evidence/completion/probes/c1c2-after-fix.txt"
+        }
+      ],
+      "tests": [
+        "tests/audit/completion.test.ts#C1",
+        "tests/e2e/pixel-privacy.test.ts#closed shadow roots on any host (completion C1)",
+        "tests/e2e/pixel-privacy.test.ts#a fixture secret shown as closed content"
+      ],
+      "lanes": [
+        "audit",
+        "e2e"
+      ],
+      "external_prerequisite": null,
+      "cross_references": [
+        "R4",
+        "N1",
+        "P4a",
+        "P4b"
+      ],
+      "scope": "safeScreenshot: evidence screenshots, visual candidates and diffs, S2 request images",
+      "notes": "Chromium: every closed shadow root is inventoried through the DevTools protocol (main document, same-process frames and each out-of-process frame target), whatever its host tag, including declarative, nested and late roots; the outermost reachable host is marked sensitive and opaque, then suppressed and verified as before. Browsers without the protocol withhold every image (closed roots cannot be ruled out there). A failed capture attempt is retried and leaves no marks, sheets, observers or markup changes.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "C2",
+      "title": "Sandbox resource contract: required memory and swap bounds enforced or execution refused",
+      "phase": 3,
+      "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+      "history": [
+        {
+          "state": "SOURCE_REVIEW_PENDING_REPRODUCTION",
+          "revision": "524a8e9",
+          "source": "post-PR #5 completion plan"
+        },
+        {
+          "state": "REPRODUCED",
+          "revision": "524a8e9",
+          "evidence": "docs/evidence/completion/probes/c1c2-at-524a8e9.txt",
+          "observed": "cgroup v1 host: a denied write, and a weaker read-back, of memory.memsw.limit_in_bytes both left the program running"
+        },
+        {
+          "state": "IMPLEMENTED_OFFLINE_VERIFIED",
+          "evidence": "docs/evidence/completion/probes/c1c2-after-fix.txt"
+        }
+      ],
+      "tests": [
+        "tests/audit/completion.test.ts#C2",
+        "tests/isolation/resource-contract.test.ts"
+      ],
+      "lanes": [
+        "audit",
+        "isolation"
+      ],
+      "external_prerequisite": "A delegated kernel cgroup (see MEM); resource-pressure evidence only on disposable supported workers",
+      "cross_references": [
+        "MEM",
+        "P4c",
+        "F03"
+      ],
+      "scope": "packages/compiler cgroup factory, sandbox gate, generated-spec validation",
+      "notes": "Contract: resident memory plus swap of the whole tree within the limit — v2 memory.swap.max=0, v1 memory.memsw.limit_in_bytes = limit, or no host swap when the kernel has no swap accounting; each bound written and read back, else refused with a typed reason (control_write_failed, limit_mismatch, swap_unbounded, controller_missing, invalid_config, membership_unverified). Process cap: cgroup pids.max read back where available; v1 without a pids hierarchy records RLIMIT_NPROC (per user), never presented as a cgroup cap. Invalid numeric configuration (including QA_SANDBOX_MEMORY_MB) is an error, not a default.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "tests listed in \"tests\" pass in the named lanes",
+        "provider_proof": "not applicable",
+        "target_qualification": "none"
+      }
+    },
+    {
+      "id": "TARGET-ONBOARD",
+      "title": "A real target application is onboarded (contracts, roles, fixtures, oracles, cleanup)",
+      "phase": 4,
+      "state": "BLOCKED",
+      "tests": [
+        "packages/contracts/test/onboarding.test.ts"
+      ],
+      "lanes": [
+        "unit"
+      ],
+      "external_prerequisite": "Every input of docs/templates/target-onboarding.yaml from the application owner; `qa onboarding-check` names what is missing",
+      "scope": "target adapter, scenario catalog, backend oracles, fixtures, cleanup",
+      "notes": "Manifest schema, checker and runbook (docs/target-onboarding.md) exist; no target inputs have been supplied, so nothing target-specific is implemented or claimed.",
+      "levels": {
+        "mechanism": "implemented (configuration, validation and runbook)",
+        "fixture_proof": "see tests",
+        "provider_proof": "none",
+        "target_qualification": "BLOCKED"
+      }
+    },
+    {
+      "id": "TARGET-DEPLOY",
+      "title": "Installed deployment trigger and real promotion consumer, with clean and negative acceptance",
+      "phase": 5,
+      "state": "BLOCKED",
+      "tests": [
+        "tests/service/lineage.test.ts",
+        "tests/service/promotion.test.ts"
+      ],
+      "lanes": [
+        "service"
+      ],
+      "external_prerequisite": "TARGET-ONBOARD inputs, deployment-provider access and the owner's promotion controller",
+      "scope": "deployment events, gate, single-use promotion",
+      "notes": "The mechanism and its fixture demonstration exist (service lane, Docker demo). The ten acceptance cases in docs/target-onboarding.md §5 must run against the real installation; none has.",
+      "levels": {
+        "mechanism": "implemented (configuration, validation and runbook)",
+        "fixture_proof": "see tests",
+        "provider_proof": "none",
+        "target_qualification": "BLOCKED"
+      }
+    },
+    {
+      "id": "BROWSERS",
+      "title": "Evidence for every required browser and device profile",
+      "phase": 6,
+      "state": "BLOCKED",
+      "tests": [],
+      "lanes": [],
+      "external_prerequisite": "Firefox/WebKit binaries on the runner (only Chromium is installed), native devices where required, and the target's profile list",
+      "scope": "execution profiles",
+      "notes": "Chromium desktop and mobile-viewport emulation have fixture evidence. Outside Chromium, screenshots are withheld (C1).",
+      "levels": {
+        "mechanism": "partial",
+        "fixture_proof": "Chromium only",
+        "provider_proof": "not applicable",
+        "target_qualification": "BLOCKED"
+      }
+    },
+    {
+      "id": "OPS-TARGET",
+      "title": "Operational acceptance on the actual runner, database, storage and deployment environment",
+      "phase": 7,
+      "state": "BLOCKED",
+      "tests": [],
+      "lanes": [],
+      "external_prerequisite": "Access to the intended runner, database, artifact storage and deployment environment",
+      "scope": "deployment, migrations, recovery, permissions, metrics",
+      "notes": "Recovery and fencing behaviour is covered by the service lane against local PostgreSQL 16 only.",
+      "levels": {
+        "mechanism": "implemented",
+        "fixture_proof": "service lane, Docker demo",
+        "provider_proof": "not applicable",
+        "target_qualification": "BLOCKED"
+      }
     }
   ],
   "reaudit": {
@@ -723,5 +892,12 @@
     ],
     "lanes": "docs/evidence/review4-lanes/",
     "report": "docs/review4-closure.md"
+  },
+  "completion": {
+    "baseline_revision": "524a8e96cb98c89c99e265a9836682c09ee4cda5",
+    "baseline_lanes": "docs/evidence/completion/baseline-524a8e9/",
+    "probes": "tests/audit/completion.test.ts",
+    "ledger": "docs/completion-ledger.md",
+    "report": "docs/completion-report.md"
   }
 }

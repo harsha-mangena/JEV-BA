@@ -32,12 +32,21 @@ qualification for every area. A fourth review of the merged result found that
 page CSS and low-contrast glyphs could defeat the screenshot privacy check and
 that a plain directory was accepted as a memory cgroup (P4a–P4c); the fixes
 and fresh lane evidence are in [`docs/review4-closure.md`](docs/review4-closure.md).
+The post-PR #5 completion plan reproduced and fixed two more (C1: closed shadow
+roots on ordinary elements escaped screenshot discovery; C2: the cgroup v1
+memory-and-swap bound could fail silently), added a target onboarding manifest
+and checker (`qa onboarding-check`), and records what remains blocked on
+credentials, a target application and its deployment environment —
+[`docs/completion-report.md`](docs/completion-report.md),
+[`docs/completion-ledger.md`](docs/completion-ledger.md),
+[`docs/target-onboarding.md`](docs/target-onboarding.md).
 
 | Item | State |
 | --- | --- |
-| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency; re-audit R1–R5, review-3 N1–N3, review-4 P4a–P4c | `IMPLEMENTED_OFFLINE_VERIFIED` |
+| F02 effect authorization, F03 sandbox, F04 autonomy modes, F05 execution snapshot, F06 artifact sanitization, F08 deadlines, F09 durable intents, F10 capabilities, concurrency; re-audit R1–R5, review-3 N1–N3, review-4 P4a–P4c, completion C1–C2 | `IMPLEMENTED_OFFLINE_VERIFIED` |
 | F01 TypeSafe/Jev contract, F07 vision S2 | `LIVE_VERIFICATION_REQUIRED` (provider credentials) |
 | Calibrated autonomy for any profile | `BLOCKED` (no representative labelled data or live record; workers run calibrated exploration in shadow mode) |
+| Real target onboarding, deployment enforcement, Firefox/WebKit, operational acceptance | `BLOCKED` (owner inputs, deployment access, browser binaries, target environment) |
 
 Nothing is described as complete unless its lane evidence supports it; mocked
 or skipped tests are never counted as live verification.
